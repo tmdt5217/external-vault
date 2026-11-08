@@ -1,7 +1,7 @@
 'use strict';
 
 /*
- * external-file-image-pxm  v1.7.0
+ * external-file-image-pxm  v1.8.0
  *
  * 用途：Obsidian 1.14+ 编辑「仓库外的 Markdown 文件」时：
  *   1) 命令「新建库外 Markdown 文件」→ 在「库外 MD 目录」里创建 .md 并尝试打开
@@ -876,8 +876,9 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     });
 
     this.patchOpenLinkText();
+    this.setupExternalLinkRendering();
 
-    console.log(LOG, 'loaded v1.7.0', 'md=', this.mdRel(), 'assets=', this.assetRel(),
+    console.log(LOG, 'loaded v1.8.0', 'md=', this.mdRel(), 'assets=', this.assetRel(),
       'TExternalFile=', !!(obsidian.TExternalFile));
   }
 
@@ -1310,6 +1311,60 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       });
       this.dbg('openLinkText 已接管库外链接');
     } catch (e) { this.dbg('patch openLinkText 失败', e.message); }
+  }
+
+  /**
+   * 库外链接的渲染与悬停处理：
+   * 1) 阅读视图把指向库外的 internal-link 改成 external-link，样式与库内链接区分，
+   *    Hover Editor / 原生预览也不会再把它当成「未创建的笔记」。
+   * 2) 点击这类链接由插件用绝对路径打开（相对路径仍留在源文件里，可移植）。
+   * 3) 编辑视图的链接仍是 internal-link，悬停时拦住冒泡，避免 Hover Editor 误判。
+   */
+  setupExternalLinkRendering() {
+    this.registerMarkdownPostProcessor((el, ctx) => {
+      try {
+        if (!ctx || !ctx.sourcePath || String(ctx.sourcePath).startsWith('file:')) return;
+        const links = el.querySelectorAll('a.internal-link');
+        for (const a of links) {
+          const href = a.getAttribute('data-href') || a.getAttribute('href');
+          if (!href) continue;
+          const abs = this.externalTargetForLink(href, ctx.sourcePath);
+          if (!abs) continue;
+          a.classList.remove('internal-link');
+          a.classList.add('external-link', 'pxm-external-link');
+          a.setAttribute('data-pxm-abs', abs);
+          a.setAttribute('href', 'file://' + abs.split(path.sep).join('/'));
+          a.setAttribute('title', '库外文件：' + abs);
+        }
+      } catch (e) { this.dbg('标记库外链接失败', e.message); }
+    });
+
+    this.registerDomEvent(document, 'click', (e) => {
+      const t = e.target;
+      const a = t && typeof t.closest === 'function' ? t.closest('a.pxm-external-link') : null;
+      if (!a) return;
+      const abs = a.getAttribute('data-pxm-abs');
+      if (!abs) return;
+      e.preventDefault();
+      e.stopPropagation();
+      this.guard(() => this.openExternalMd(abs));
+    }, true);
+
+    this.registerDomEvent(document, 'mouseover', (e) => {
+      const t = e.target;
+      const a = t && typeof t.closest === 'function' ? t.closest('a.internal-link') : null;
+      if (!a) return;
+      let sourcePath = '';
+      try {
+        const f = this.app.workspace.getActiveFile();
+        sourcePath = f ? f.path : '';
+      } catch (err) { /* noop */ }
+      const abs = this.externalTargetForLink(
+        a.getAttribute('data-href') || a.getAttribute('href'), sourcePath);
+      if (!abs) return;
+      a.classList.add('pxm-external-link');
+      e.stopPropagation();
+    }, true);
   }
 
   /**

@@ -66,6 +66,25 @@ textarea.efi-template-textarea {
 /* 如以后要给库外标签页加视觉标记：
    .view-header-title-parent.mod-external-file { } */
 
+/* 库外文件链接：与库内链接区分 */
+.pxm-external-link {
+  color: var(--color-orange, var(--text-warning));
+  text-decoration: none;
+  border-bottom: 1px dashed currentColor;
+  background-image: none;
+}
+.pxm-external-link::after {
+  content: '↗';
+  margin-left: 2px;
+  font-size: 0.72em;
+  vertical-align: super;
+  opacity: 0.85;
+}
+.pxm-external-link:hover {
+  color: var(--color-orange, var(--text-warning));
+  border-bottom-style: solid;
+}
+
 /* 库外文件管理器（ExternalFilesModal） */
 .modal.efi-files-modal {
   width: min(620px, calc(100vw - 32px));
