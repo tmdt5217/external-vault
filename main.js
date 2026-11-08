@@ -1869,8 +1869,26 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       const dir = path.join(root, '.obsidian', 'plugins', 'external-vault', '.undo',
         String(tag || 'op') + '-' + Date.now());
       fs.mkdirSync(dir, { recursive: true });
+      this.cleanupBackups(5);
       return dir;
     } catch (e) { return null; }
+  }
+
+  /** 只保留最近 N 次备份，避免 .undo 目录无限增长 */
+  cleanupBackups(keep) {
+    try {
+      const root = vaultRoot(this.app);
+      if (!root) return;
+      const base = path.join(root, '.obsidian', 'plugins', 'external-vault', '.undo');
+      const entries = fs.readdirSync(base, { withFileTypes: true });
+      const dirs = entries.filter((e) => e.isDirectory()).map((e) => e.name).sort();
+      const limit = typeof keep === 'number' ? keep : 5;
+      for (const name of dirs.slice(0, Math.max(0, dirs.length - limit))) {
+        try {
+          fs.rmSync(path.join(base, name), { recursive: true, force: true });
+        } catch (e) { /* noop */ }
+      }
+    } catch (e) { /* noop */ }
   }
 
   backupFile(src, backupDir, index) {
