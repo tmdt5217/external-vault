@@ -12,6 +12,7 @@ An Obsidian plugin for editing Markdown notes **outside your vault**: paste or d
 - **右键菜单**：库内笔记（支持多选）→「移出 Vault」；库外文件的标签页 →「移入 Vault」。两者都会把笔记链接的本地附件一起搬走，并重写成新位置的相对路径；`[[双链]]` 和网络图片不会被搬动。
 - **删除库外笔记**：库外标签页右键 →「删除库外 MD（含附件）」。删除前扫描该笔记链接的附件，只删**未被其他笔记引用**的库外附件；仍被引用的附件和库内附件一律保留。
 - **库外文件管理器**：Ribbon 菜单 →「管理库外文件…」，一次列出 External Vault 下所有 Markdown（含子目录）及其附件数、修改时间，可全选或多选批量删除。批量删除时，只要附件仍被**未选中**的任意笔记引用，就保留不删。
+- **库内链接库外**：库内笔记里写一个相对链接（如 `[标题](../External%20Vault/笔记.md)`），点击即可在 Obsidian 里打开库外文件，不会误建空笔记。命令「插入链接：指向库外文件（相对路径）」会按当前笔记所在目录自动生成链接，换电脑后只要目录结构一致就能继续用。
 - **真剪切**：源文件直接移除，不生成额外的备份目录；删前会校验所有目标文件已写盘，被其他笔记共用的附件只复制、保留原件。可选移入系统废纸篓。
 - **零配置默认**：与库同级的 `External Vault/` 放 MD，`External Vault/attachments/` 放附件。也可以只设置两个相对目录，改用自定义模式。
 
@@ -37,6 +38,7 @@ An Obsidian plugin for editing Markdown notes **outside your vault**: paste or d
 2. 在库外笔记里直接粘贴截图或拖入文件，插件会把附件写入库外附件目录并插入相对路径。
 3. 在库内文件列表右键笔记（可多选）选择「移出 Vault」；在库外笔记标签页右键选择「移入 Vault」或「删除库外 MD（含附件）」。
 4. 要集中清理库外笔记，点左侧 Ribbon 的文件夹按钮 →「管理库外文件…」，勾选后批量删除。
+5. 从库内笔记链接到库外文件：打开那篇库内笔记，运行命令「插入链接：指向库外文件（相对路径）」，选一篇库外笔记即可插入相对链接。
 
 默认目标：移出时 MD 落到 `External Vault/`、附件落到 `External Vault/attachments/`；移入时 MD 落到库根目录、附件落到库内默认附件文件夹。
 
@@ -83,6 +85,7 @@ An Obsidian plugin for editing Markdown notes **outside your vault**: paste or d
 - Move notes with their attachments in or out of the vault from the file context menu (multi-select supported) or the external note's tab. Links are rewritten automatically; wiki links and remote images are left untouched.
 - Delete an external note from its tab menu: linked attachments that no other external note references are removed with it; shared attachments and anything inside the vault are kept.
 - Manage external notes from the ribbon menu: list every Markdown file in External Vault, show its attachment count and modified time, select several, and delete them together with their attachments. An attachment is kept whenever any unselected note still references it.
+- Link to external notes from inside the vault: a relative Markdown link such as `[Title](../External%20Vault/note.md)` opens the external file in Obsidian instead of creating an empty note. The "Insert link to external file (relative path)" command builds the link from the current note's folder, so it keeps working after moving the folder structure to another computer.
 - Zero-config default: a sibling `External Vault/` folder for notes and `External Vault/attachments/` for attachments, or two custom relative directories.
 
 **External file access:** this plugin reads and writes files outside the vault, limited to the two directories you configure. It is required because Obsidian's native paste/drop writes attachments into the vault, and because moving notes in or out of the vault must touch both locations. The plugin makes no network requests, collects no telemetry, and uploads nothing. Source files are removed only after every target file is verified on disk; attachments shared with other notes are copied, not deleted.

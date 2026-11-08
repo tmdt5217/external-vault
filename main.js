@@ -1,7 +1,7 @@
 'use strict';
 
 /*
- * external-file-image-pxm  v1.5.0
+ * external-file-image-pxm  v1.6.0
  *
  * 用途：Obsidian 1.14+ 编辑「仓库外的 Markdown 文件」时：
  *   1) 命令「新建库外 Markdown 文件」→ 在「库外 MD 目录」里创建 .md 并尝试打开
@@ -857,6 +857,11 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       name: '库外文件：查看全部并批量删除（含附件）',
       callback: () => this.guard(() => this.openExternalFilesModal()),
     });
+    this.addCommand({
+      id: 'insert-external-link',
+      name: '插入链接：指向库外文件（相对路径）',
+      callback: () => this.guard(() => this.insertExternalLink()),
+    });
 
     this.addCommand({
       id: 'fix-wiki-image-links',
@@ -870,7 +875,9 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       callback: () => { this.diagnose().catch((err) => this.reportError(err)); },
     });
 
-    console.log(LOG, 'loaded v1.4.4', 'md=', this.mdRel(), 'assets=', this.assetRel(),
+    this.patchOpenLinkText();
+
+    console.log(LOG, 'loaded v1.6.0', 'md=', this.mdRel(), 'assets=', this.assetRel(),
       'TExternalFile=', !!(obsidian.TExternalFile));
   }
 
@@ -1179,9 +1186,127 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     }
   }
 
-  /** 库外文件管理器：查看全部 + 多选批量删除 */
-  openExternalFilesModal() {
-    new ExternalFilesModal(this.app, this).open();
+  /** 库外文件管理器：默认多选删除；mode='pick' 时单击选中并回调 */
+  openExternalFilesModal(opts) {
+    new ExternalFilesModal(this.app, this, opts || {}).open();
+  }
+
+  /**
+   * 把库内笔记里的链接解析成「库外 MD 的绝对路径」。
+   * 支持：../External Vault/x.md（相对当前笔记目录）、file:/绝对路径、绝对路径。
+   * 只认库外、存在、扩展名为 md 的目标；其余返回 null，交回 Obsidian 原生逻辑。
+   */
+  externalTargetForLink(linktext, sourcePath) {
+    try {
+      let raw = String(linktext || '').trim();
+      if (!raw) return null;
+      if (raw.startsWith('<') && raw.endsWith('>')) raw = raw.slice(1, -1);
+      raw = raw.split('#')[0].trim();
+      if (!raw) return null;
+      try { raw = decodeURIComponent(raw); } catch (e) { /* 保留原样 */ }
+
+      const vRoot = vaultRoot(this.app);
+      if (!vRoot) return null;
+      const candidates = [];
+      if (/^file:/i.test(raw)) {
+        const abs = normalizeFsPath(raw);
+        if (abs) candidates.push(abs);
+      } else if (path.isAbsolute(raw)) {
+        candidates.push(raw);
+      } else {
+        let baseDir = vRoot;
+        if (sourcePath && !String(sourcePath).startsWith('file:')) {
+          baseDir = path.dirname(path.resolve(vRoot, sourcePath));
+        }
+        if (/^\.\.?\//.test(raw)) candidates.push(path.resolve(baseDir, raw));
+        else {
+          candidates.push(path.resolve(vRoot, raw));
+          candidates.push(path.resolve(baseDir, raw));
+        }
+      }
+      for (const abs of candidates) {
+        if (!abs) continue;
+        // 库内 Markdown 链接一般带 .md；[[wiki]] 形式可能不带扩展名，补一次
+        const tries = isMdPath(abs) ? [abs] : [abs, abs + '.md'];
+        for (const p of tries) {
+          if (!isMdPath(p)) continue;
+          if (isInsideVault(p, this.app)) continue;
+          if (!fs.existsSync(p)) continue;
+          return p;
+        }
+      }
+      return null;
+    } catch (e) {
+      this.dbg('解析库外链接失败', e.message);
+      return null;
+    }
+  }
+
+  /** 生成从某篇库内笔记指向库外文件的相对链接（可跨电脑复用） */
+  externalLinkFor(targetAbs, fromVaultRel) {
+    const vRoot = vaultRoot(this.app);
+    if (!vRoot) throw new Error('拿不到 vault 根目录');
+    const fromAbs = path.resolve(vRoot, fromVaultRel || '');
+    const fromDir = isMdPath(fromAbs) ? path.dirname(fromAbs) : fromAbs;
+    let rel = path.relative(fromDir, targetAbs).split(path.sep).join('/');
+    if (!rel.startsWith('.')) rel = './' + rel;
+    // 逐段编码：空格、#、?、% 会被正确处理，中文保持原样
+    return rel.split('/').map((seg) => seg
+      .replace(/%/g, '%25').replace(/#/g, '%23')
+      .replace(/\?/g, '%3F').replace(/ /g, '%20')).join('/');
+  }
+
+  /** 命令：在当前库内笔记光标处插入指向库外 MD 的相对链接 */
+  async insertExternalLink() {
+    const file = this.app.workspace.getActiveFile();
+    if (!file || isExternalTFile(file) || !isMdPath(file.path)) {
+      new obsidian.Notice('请先打开一个库内 Markdown 笔记，再插入库外文件链接', 7000);
+      return;
+    }
+    const view = this.app.workspace.getActiveViewOfType(obsidian.MarkdownView);
+    this.openExternalFilesModal({
+      mode: 'pick',
+      onPick: (abs) => {
+        const href = this.externalLinkFor(abs, file.path);
+        const label = path.basename(abs, path.extname(abs));
+        const md = '[' + label + '](' + href + ')';
+        if (view && view.editor && typeof view.editor.replaceSelection === 'function') {
+          view.editor.replaceSelection(md);
+          new obsidian.Notice('已插入链接：' + md, 6000);
+        } else {
+          navigator.clipboard.writeText(md)
+            .then(() => new obsidian.Notice('已复制链接：' + md, 6000))
+            .catch(() => new obsidian.Notice('链接：' + md, 9000));
+        }
+      },
+    });
+  }
+
+  /**
+   * Obsidian 的 openLinkText 只在 vault 索引里找目标，找不到会提示或新建空笔记。
+   * 这里在调用原方法前，把指向库外 MD 的相对链接接管掉。
+   */
+  patchOpenLinkText() {
+    try {
+      const ws = this.app.workspace;
+      if (!ws || typeof ws.openLinkText !== 'function' || ws.__pxmExternalLinkPatched) return;
+      const orig = ws.openLinkText.bind(ws);
+      this._origOpenLinkText = orig;
+      ws.openLinkText = (linktext, sourcePath, newLeaf, openViewState) => {
+        const abs = this.externalTargetForLink(linktext, sourcePath);
+        if (abs) return this.openExternalMd(abs);
+        return orig(linktext, sourcePath, newLeaf, openViewState);
+      };
+      ws.__pxmExternalLinkPatched = true;
+      this.register(() => {
+        try {
+          if (!ws.__pxmExternalLinkPatched) return;
+          ws.openLinkText = orig;
+          delete ws.__pxmExternalLinkPatched;
+        } catch (e) { /* noop */ }
+      });
+      this.dbg('openLinkText 已接管库外链接');
+    } catch (e) { this.dbg('patch openLinkText 失败', e.message); }
   }
 
   /**
@@ -2369,9 +2494,12 @@ class DeleteExternalNoteModal extends obsidian.Modal {
 }
 
 class ExternalFilesModal extends obsidian.Modal {
-  constructor(app, plugin) {
+  constructor(app, plugin, opts) {
     super(app);
     this.plugin = plugin;
+    this.opts = opts || {};
+    this.mode = this.opts.mode === 'pick' ? 'pick' : 'manage';
+    this.onPick = this.opts.onPick || null;
     this.files = [];
     this.selected = new Set();
     this.stage = 'list';
@@ -2415,23 +2543,28 @@ class ExternalFilesModal extends obsidian.Modal {
       return;
     }
 
-    el.createEl('h2', { text: '库外文件' });
+    const picking = this.mode === 'pick';
+    el.createEl('h2', { text: picking ? '插入库外文件链接' : '库外文件' });
     el.createEl('p', {
       cls: 'setting-item-description',
-      text: '目录：' + this.plugin.externalMdDir() + '　共 ' + this.files.length + ' 篇',
+      text: picking
+        ? '点击一行，在当前库内笔记光标处插入相对链接（../External Vault/…）。换电脑后只要目录结构一致，链接照常可用。'
+        : '目录：' + this.plugin.externalMdDir() + '　共 ' + this.files.length + ' 篇',
     });
 
-    const toolbar = el.createDiv({ cls: 'efi-files-toolbar' });
-    const all = toolbar.createEl('label', { cls: 'efi-files-all' });
-    const allBox = all.createEl('input', { type: 'checkbox' });
-    allBox.checked = this.files.length > 0 && this.selected.size === this.files.length;
-    allBox.addEventListener('change', () => {
-      if (allBox.checked) this.files.forEach((f) => this.selected.add(f.abs));
-      else this.selected.clear();
-      this.render();
-    });
-    all.createSpan({ text: '全选' });
-    toolbar.createSpan({ cls: 'efi-files-count', text: '已选 ' + this.selected.size + ' 篇' });
+    if (!picking) {
+      const toolbar = el.createDiv({ cls: 'efi-files-toolbar' });
+      const all = toolbar.createEl('label', { cls: 'efi-files-all' });
+      const allBox = all.createEl('input', { type: 'checkbox' });
+      allBox.checked = this.files.length > 0 && this.selected.size === this.files.length;
+      allBox.addEventListener('change', () => {
+        if (allBox.checked) this.files.forEach((f) => this.selected.add(f.abs));
+        else this.selected.clear();
+        this.render();
+      });
+      all.createSpan({ text: '全选' });
+      toolbar.createSpan({ cls: 'efi-files-count', text: '已选 ' + this.selected.size + ' 篇' });
+    }
 
     const listEl = el.createDiv({ cls: 'efi-files-list' });
     if (!this.files.length) {
@@ -2439,26 +2572,37 @@ class ExternalFilesModal extends obsidian.Modal {
     }
     for (const f of this.files) {
       const row = listEl.createEl('label', { cls: 'efi-files-row' });
-      const box = row.createEl('input', { type: 'checkbox' });
-      box.checked = this.selected.has(f.abs);
-      box.addEventListener('change', () => {
-        if (box.checked) this.selected.add(f.abs);
-        else this.selected.delete(f.abs);
-        this.render();
-      });
+      if (!picking) {
+        const box = row.createEl('input', { type: 'checkbox' });
+        box.checked = this.selected.has(f.abs);
+        box.addEventListener('change', () => {
+          if (box.checked) this.selected.add(f.abs);
+          else this.selected.delete(f.abs);
+          this.render();
+        });
+      }
       const main = row.createDiv({ cls: 'efi-files-main' });
       main.createDiv({ cls: 'efi-files-name', text: path.basename(f.abs) });
       main.createDiv({ cls: 'efi-files-path', text: f.rel });
       const meta = row.createDiv({ cls: 'efi-files-meta' });
       meta.textContent = (f.assets ? f.assets + ' 个附件' : '无附件') +
         (f.mtime ? ' · ' + new Date(f.mtime).toLocaleString() : '');
+      if (picking) {
+        row.addEventListener('click', (e) => {
+          e.preventDefault();
+          if (this.onPick) this.onPick(f.abs);
+          this.close();
+        });
+      }
     }
 
     const buttons = el.createDiv({ cls: 'efi-buttons' });
-    const del = buttons.createEl('button', { text: '删除选中（含附件）', cls: 'mod-warning' });
-    del.disabled = this.selected.size === 0;
-    del.addEventListener('click', () => { this.prepareDelete(); });
-    const close = buttons.createEl('button', { text: '关闭' });
+    if (!picking) {
+      const del = buttons.createEl('button', { text: '删除选中（含附件）', cls: 'mod-warning' });
+      del.disabled = this.selected.size === 0;
+      del.addEventListener('click', () => { this.prepareDelete(); });
+    }
+    const close = buttons.createEl('button', { text: picking ? '取消' : '关闭' });
     close.addEventListener('click', () => this.close());
     el.addEventListener('keydown', (e) => { if (e.key === 'Escape') this.close(); });
   }
