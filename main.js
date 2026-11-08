@@ -5110,6 +5110,10 @@ class ExternalVaultView extends obsidian.ItemView {
     const file = { path: 'file:' + f.abs, extension: 'md', getRealPath: () => f.abs };
     menu.addItem((i) => i.setTitle(tr('打开')).setIcon('lucide-file-text')
       .onClick(() => this.plugin.guard(() => this.plugin.openExternalMd(f.abs))));
+    if (f.kind === 'md') {
+      menu.addItem((i) => i.setTitle(tr('重命名')).setIcon('lucide-pencil')
+        .onClick(() => this.plugin.guard(() => this.plugin.renameExternalFile(f.abs))));
+    }
     menu.addItem((i) => i.setTitle(tr('在 Finder 中显示')).setIcon('lucide-folder-open')
       .onClick(() => this.plugin.guard(() => this.plugin.revealExternalFile(f.abs))));
     if (f.kind === 'md') {
