@@ -1955,6 +1955,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       let next = content;
       const referrerAbs = t.abs;
       for (const [name, r] of byName) {
+        this.dbg('目标名[' + name + '] dest=' + r.dest + ' 在外部库=' + this.isInsideExternalVault(r.dest));
         if (this.isInsideExternalVault(r.dest)) {
           const re = new RegExp('\\[\\[' + escapeRegExp(name) +
             '(#[^\\]|]*)?(?:\\|([^\\]]*))?\\]\\]', 'g');
