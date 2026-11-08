@@ -954,6 +954,11 @@ function findTrashItem(srcPath) {
   return null;
 }
 
+/** 正则转义 */
+function escapeRegExp(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 /** 时间戳 → YYYY-MM-DD HH:mm */
 function fmtDateTime(ms) {
   if (!ms) return '';
@@ -1898,6 +1903,58 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       fs.copyFileSync(src, dest);
       return dest;
     } catch (e) { return null; }
+  }
+
+  /**
+   * 笔记移入/移出后，改写「引用它的库内笔记」里的链接：
+   * - 库内 → 外：[[名字]] 改成 [名字](库外相对路径)
+   * - 外 → 内：指向外部路径的 markdown 链接改回 [[名字]]
+   */
+  async rewriteExternalReferrers(records) {
+    if (!records || !records.length) return 0;
+    const vRoot = vaultRoot(this.app);
+    if (!vRoot) return 0;
+    const byName = new Map();
+    for (const r of records) {
+      byName.set(path.basename(r.src, path.extname(r.src)), r);
+    }
+    let changed = 0;
+    const files = this.app.vault.getMarkdownFiles();
+    for (const file of files) {
+      let content = '';
+      try { content = await this.app.vault.read(file); } catch (e) { continue; }
+      let next = content;
+      const referrerAbs = path.resolve(vRoot, file.path);
+      for (const [name, r] of byName) {
+        if (this.isInsideExternalVault(r.dest)) {
+          const re = new RegExp('\\[\\[' + escapeRegExp(name) +
+            '(#[^\\]|]*)?(?:\\|([^\\]]*))?\\]\\]', 'g');
+          next = next.replace(re, (m, hash, alias) => {
+            try {
+              const rel = this.externalLinkFromAbs(r.dest, referrerAbs);
+              return '[' + (alias || name) + '](' + rel + ')';
+            } catch (e) { return m; }
+          });
+        } else {
+          next = next.replace(/\[([^\]]*)\]\(([^)]+)\)/g, (m, text, href) => {
+            try {
+              const decoded = decodeURIComponent(href.replace(/^<|>$/g, ''));
+              const resolved = path.resolve(path.dirname(referrerAbs), decoded);
+              if (path.resolve(resolved) !== path.resolve(r.src)) return m;
+              const label = text && text !== name ? '|' + text : '';
+              return '[[' + name + label + ']]';
+            } catch (e) { return m; }
+          });
+        }
+      }
+      if (next !== content) {
+        try {
+          await this.app.vault.process(file, () => next);
+          changed += 1;
+        } catch (e) { /* noop */ }
+      }
+    }
+    return changed;
   }
 
   /** 撤销上一次移入/移出：删除目标文件，再从系统废纸篓把源文件移回原路径 */
@@ -3002,6 +3059,13 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     new obsidian.Notice(summary, 10000);
     console.log(LOG, summary);
     if (missingRefs) console.warn(LOG, missingRefs + ' 个附件引用找不到源文件，链接未重写');
+    if (doMove) {
+      try {
+        const changed = await this.rewriteExternalReferrers(
+          plans.map((p) => ({ src: p.src, dest: p.dest })));
+        if (changed) this.dbg('已改写引用笔记', changed);
+      } catch (e) { this.dbg('改写引用链接失败', e.message); }
+    }
     if (doMove && cut.removed > 0) {
       this.settings.lastMove = {
         ts: Date.now(),
