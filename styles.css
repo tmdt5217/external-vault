@@ -159,10 +159,10 @@ span.cm-hmd-internal-link.ev-external-link .cm-underline,
 /* 圆点绝对定位，不参与布局；所有文件行固定左内边距，选中不改变文字位置 */
 .ev-panel .nav-file-title {
   position: relative;
-  padding-left: 28px;
+  padding-left: 28px !important;
 }
-.ev-panel .nav-files-container > .nav-file > .nav-file-title { padding-left: 28px; }
-.ev-panel .nav-file-title.is-active { padding-left: 28px; }
+.ev-panel .nav-files-container > .nav-file > .nav-file-title { padding-left: 28px !important; }
+.ev-panel .nav-file-title.is-active { padding-left: 28px !important; }
 .ev-panel .nav-file-title.is-active::before,
 .ev-panel .nav-file-title.is-active::after {
   content: none;
