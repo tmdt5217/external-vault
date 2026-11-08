@@ -3395,10 +3395,14 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
         });
       }
     } catch (e) { this.dbg('枚举标签页失败', e.message); }
+    // 绝不关闭当前活动的标签：宁可留着旧标签，也不让前台笔记被切走
+    const active = this.app.workspace.activeLeaf;
+    let closed = 0;
     for (const leaf of leaves) {
-      try { leaf.detach(); } catch (e) { this.dbg('关闭标签页失败', e.message); }
+      if (active && leaf === active) continue;
+      try { leaf.detach(); closed += 1; } catch (e) { this.dbg('关闭标签页失败', e.message); }
     }
-    this.dbg('已关闭标签页', leaves.length);
+    this.dbg('已关闭标签页', closed);
   }
 
   /** 找当前打开某个文件的标签页；找不到返回 null */
