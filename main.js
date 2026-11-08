@@ -2998,7 +2998,8 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       } catch (e) { /* noop */ }
       return null;
     };
-    for (let i = 0; i < 25; i += 1) {
+    // 大库索引可能滞后，最多等 10 秒；拿到对象后立刻在原标签里打开
+    for (let i = 0; i < 125; i += 1) {
       const f = find();
       if (f) {
         try {
