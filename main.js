@@ -2222,9 +2222,13 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     this.registerEvent(this.app.workspace.on('leaf-menu', (menu, leaf) => {
       try {
         const file = leaf && leaf.view && leaf.view.file;
-        if (file && isMdFileObject(file) && isExternalTFile(file)) {
+        if (!file || !isMdFileObject(file)) return;
+        if (isExternalTFile(file)) {
           addMoveIn(menu, file);
           addDelete(menu, file);
+        } else {
+          // 库内笔记的标签页右键：与文件列表一样提供「移出 Vault」
+          addMoveOut(menu, file);
         }
       } catch (e) { this.dbg('leaf-menu 处理失败', e.message); }
     }));
