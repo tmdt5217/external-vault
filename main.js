@@ -201,6 +201,17 @@ const EN = {
   '已删除': 'Deleted',
   '个孤儿附件': 'orphan attachments',
   '个删除失败': 'failed to delete',
+  '当前外部库': 'Active external vault',
+  '右侧面板、新建笔记、移出 Vault 都作用于这个库': 'The sidebar panel, new notes and "Move out of vault" all use this vault.',
+  '其他外部库': 'Other external vaults',
+  '名称': 'Name',
+  '删除': 'Delete',
+  'MD 目录': 'Notes folder',
+  '附件目录': 'Attachments folder',
+  '每个外部库有独立的 MD 和附件目录；在顶部「当前外部库」切换': 'Each external vault has its own notes and attachments folder. Switch with "Active external vault" above.',
+  '添加外部库': 'Add external vault',
+  '外部库': 'External vault',
+  '无法打开：': 'Cannot open: ',
   // 命令
   '库外文件：新建 Markdown': 'External files: New Markdown',
   '库外文件：打开 External Vault 菜单': 'External files: Open External Vault menu',
@@ -272,6 +283,8 @@ const DEFAULT_SETTINGS = {
   noteTemplatePath: DEFAULT_NOTE_TEMPLATE_PATH, // 相对 vault 根，也接受绝对路径；留空用内置 YAML
   noteTemplateText: DEFAULT_NOTE_TEMPLATE_TEXT, // 自定义内容，支持 {{title}} / {{date}} 等变量
   language: 'auto',                     // auto | zh | en
+  externalVaults: [],                   // 其他外部库：[{ id, name, mdDir, assetDir }]
+  activeVaultId: 'default',             // 当前使用的外部库
   showNotice: true,
   debug: false,
   // ---- 仅用于从 v1.2 及更早配置迁移，不再出现在设置面板 ----
@@ -1291,17 +1304,46 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
 
   // ---- 目录解析（一律相对 vault 根，不存绝对路径） -------------------------
 
-  mdRel() {
-    return this.settings.mode === 'custom'
-      ? (String(this.settings.customMdDir || '').trim() || SIMPLE_MD_REL)
-      : SIMPLE_MD_REL;
+  /** 所有外部库：默认库（简单/自定义目录）+ 额外配置 */
+  externalVaultsList() {
+    const base = {
+      id: 'default',
+      name: 'External Vault',
+      mdDir: this.settings.mode === 'custom'
+        ? (String(this.settings.customMdDir || '').trim() || SIMPLE_MD_REL)
+        : SIMPLE_MD_REL,
+      assetDir: this.settings.mode === 'custom'
+        ? (String(this.settings.customAssetDir || '').trim() || SIMPLE_ASSET_REL)
+        : SIMPLE_ASSET_REL,
+    };
+    const list = [base];
+    for (const v of (this.settings.externalVaults || [])) {
+      if (!v || !v.id) continue;
+      list.push({
+        id: v.id,
+        name: String(v.name || '').trim() || v.id,
+        mdDir: String(v.mdDir || '').trim() || SIMPLE_MD_REL,
+        assetDir: String(v.assetDir || '').trim() || SIMPLE_ASSET_REL,
+      });
+    }
+    return list;
   }
 
-  assetRel() {
-    return this.settings.mode === 'custom'
-      ? (String(this.settings.customAssetDir || '').trim() || SIMPLE_ASSET_REL)
-      : SIMPLE_ASSET_REL;
+  activeVault() {
+    const list = this.externalVaultsList();
+    return list.find((v) => v.id === this.settings.activeVaultId) || list[0];
   }
+
+  /** 切换当前外部库并确保目录存在 */
+  async setActiveVault(id) {
+    this.settings.activeVaultId = id;
+    await this.saveData(this.settings);
+    this.ensureDirs();
+  }
+
+  mdRel() { return this.activeVault().mdDir; }
+
+  assetRel() { return this.activeVault().assetDir; }
 
   /** 库外放 MD 的目录（绝对路径） */
   externalMdDir() { return resolveVaultRelative(this.app, this.mdRel()); }
@@ -1496,13 +1538,15 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     new ExternalFilesModal(this.app, this, opts || {}).open();
   }
 
-  /** 读取库外 MD 列表（含附件数与 frontmatter 别名），弹窗与侧边栏共用 */
+  /** 读取库外文件列表：MD（含别名/附件数）+ 图片/PDF/其他文件，弹窗与侧边栏共用 */
   async listExternalEntries() {
-    const dir = this.externalMdDir();
-    let list = [];
-    try { list = await listMarkdownFiles(dir, true, 8); } catch (e) { list = []; }
+    const mdDir = this.externalMdDir();
+    const assetDir = this.externalAssetDir();
     const files = [];
-    for (const abs of list) {
+    const seen = new Set();
+    let mdList = [];
+    try { mdList = await listMarkdownFiles(mdDir, true, 8); } catch (e) { mdList = []; }
+    for (const abs of mdList) {
       let st = null;
       try { st = fs.statSync(abs); } catch (e) { /* noop */ }
       let assets = 0;
@@ -1513,15 +1557,72 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       let aliases = [];
       try { aliases = parseFrontmatterAliases(await fs.promises.readFile(abs, 'utf8')); }
       catch (e) { /* noop */ }
+      seen.add(path.resolve(abs));
       files.push({
         abs,
-        rel: path.relative(dir, abs).split(path.sep).join('/'),
+        rel: path.relative(mdDir, abs).split(path.sep).join('/'),
         mtime: st ? st.mtimeMs : 0,
+        size: st ? st.size : 0,
         assets,
         aliases,
+        kind: 'md',
       });
     }
+    const walk = async (dir, base) => {
+      let entries = [];
+      try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); }
+      catch (e) { return; }
+      for (const en of entries) {
+        if (en.name.startsWith('.')) continue;
+        const p = path.join(dir, en.name);
+        if (en.isDirectory()) { await walk(p, base); continue; }
+        if (!en.isFile() || isMdPath(en.name)) continue;
+        const rp = path.resolve(p);
+        if (seen.has(rp)) continue;
+        seen.add(rp);
+        let st = null;
+        try { st = fs.statSync(p); } catch (e) { /* noop */ }
+        const ext = path.extname(en.name).slice(1).toLowerCase();
+        const kind = ext === 'pdf' ? 'pdf' : (isImageFile({ name: en.name }) ? 'image' : 'file');
+        files.push({
+          abs: p,
+          rel: path.relative(base, p).split(path.sep).join('/'),
+          mtime: st ? st.mtimeMs : 0,
+          size: st ? st.size : 0,
+          assets: 0,
+          aliases: [],
+          kind,
+        });
+      }
+    };
+    if (assetDir && fs.existsSync(assetDir)) await walk(assetDir, assetDir);
+    if (mdDir && fs.existsSync(mdDir) &&
+      path.resolve(mdDir) !== path.resolve(assetDir || '')) {
+      await walk(mdDir, mdDir);
+    }
     return files.sort((a, b) => b.mtime - a.mtime);
+  }
+
+  /** 打开库外的图片 / PDF / 其他文件：优先 Obsidian 视图，失败则用系统默认应用 */
+  async openExternalAny(abs) {
+    const unix = String(abs).split(path.sep).join('/');
+    try {
+      const f = this.app.vault.getFileByPath('file:' + unix);
+      if (f) {
+        const leaf = this.app.workspace.getLeaf(false);
+        await leaf.openFile(f);
+        return true;
+      }
+    } catch (e) { /* noop */ }
+    try {
+      const { shell } = require('electron');
+      if (shell && typeof shell.openPath === 'function') {
+        const err = await shell.openPath(abs);
+        if (!err) return true;
+      }
+    } catch (e) { /* noop */ }
+    new obsidian.Notice(tr('无法打开：') + abs, 6000);
+    return false;
   }
 
   /** 扫描附件目录里没有被任何库外笔记引用的文件 */
@@ -3307,14 +3408,21 @@ class ExternalFilesModal extends obsidian.Modal {
         });
       }
       const main = row.createDiv({ cls: 'ev-files-main' });
-      main.createDiv({ cls: 'ev-files-name', text: path.basename(f.abs) });
+      const kindLabel = f.kind === 'md' ? 'MD'
+        : (f.kind === 'pdf' ? 'PDF' : (f.kind === 'image' ? 'IMG' : 'FILE'));
+      const nameLine = main.createDiv({ cls: 'ev-files-name' });
+      nameLine.createSpan({ cls: 'ev-files-kind', text: kindLabel });
+      nameLine.createSpan({ text: path.basename(f.abs) });
       main.createDiv({ cls: 'ev-files-path', text: f.rel });
       if (f.aliases && f.aliases.length) {
         main.createDiv({ cls: 'ev-files-alias', text: tr('别名：') + f.aliases.join(' / ') });
       }
       const meta = row.createDiv({ cls: 'ev-files-meta' });
-      meta.textContent = (f.assets ? f.assets + ' 个附件' : '无附件') +
-        (f.mtime ? ' · ' + new Date(f.mtime).toLocaleString() : '');
+      meta.textContent = f.kind === 'md'
+        ? ((f.assets ? f.assets + tr(' 个附件') : tr('无附件')) +
+          (f.mtime ? ' · ' + new Date(f.mtime).toLocaleString() : ''))
+        : (formatBytes(f.size) +
+          (f.mtime ? ' · ' + new Date(f.mtime).toLocaleString() : ''));
       if (opening) {
         row.addEventListener('click', () => {
           this.listEl.querySelectorAll('.ev-files-row.is-active')
@@ -3324,7 +3432,7 @@ class ExternalFilesModal extends obsidian.Modal {
         row.addEventListener('dblclick', (e) => {
           e.preventDefault();
           e.stopPropagation();
-          this.openPicked(f.abs);
+          this.openPicked(f);
         });
       }
     }
@@ -3352,9 +3460,11 @@ class ExternalFilesModal extends obsidian.Modal {
   }
 
   /** open 模式：双击一行直接打开库外文件 */
-  openPicked(abs) {
+  openPicked(f) {
     this.close();
-    this.plugin.guard(() => this.plugin.openExternalMd(abs));
+    this.plugin.guard(() => (f.kind === 'md'
+      ? this.plugin.openExternalMd(f.abs)
+      : this.plugin.openExternalAny(f.abs)));
   }
 
   async prepareDelete() {
@@ -3555,6 +3665,15 @@ class ExternalFileImageSettingTab extends obsidian.PluginSettingTab {
           UI_LANG = detectLang(this.plugin.settings);
           this.display();
         }));
+
+    new obsidian.Setting(el)
+      .setName(tr('当前外部库'))
+      .setDesc(tr('右侧面板、新建笔记、移出 Vault 都作用于这个库'))
+      .addDropdown((d) => {
+        for (const v of this.plugin.externalVaultsList()) d.addOption(v.id, v.name);
+        d.setValue(this.plugin.settings.activeVaultId || 'default')
+          .onChange((v) => this.plugin.setActiveVault(v).then(() => this.display()));
+      });
     el.createEl('p', {
       cls: 'setting-item-description',
       text: tr('编辑库外 MD 时，粘贴 / 拖入的附件自动存进库外附件目录并插入相对路径；库内笔记行为不变。'),
@@ -3634,6 +3753,46 @@ class ExternalFileImageSettingTab extends obsidian.PluginSettingTab {
         text: tr('简易模式固定使用与库同级的 External Vault/ 放 MD、External Vault/attachments/ 放附件；插件加载时自动创建，不需要选任何文件夹。'),
       });
     }
+
+    new obsidian.Setting(el).setName(tr('其他外部库')).setHeading();
+    const extras = this.plugin.settings.externalVaults || [];
+    for (const v of extras) {
+      new obsidian.Setting(el)
+        .setName(v.name || v.id)
+        .setDesc(tr('名称'))
+        .addText((t) => t.setValue(v.name || '')
+          .onChange((x) => { v.name = x.trim(); save('externalVaults', extras); }))
+        .addButton((b) => b.setButtonText(tr('删除')).onClick(async () => {
+          this.plugin.settings.externalVaults = extras.filter((x) => x.id !== v.id);
+          if (this.plugin.settings.activeVaultId === v.id) {
+            this.plugin.settings.activeVaultId = 'default';
+          }
+          await save('externalVaults', this.plugin.settings.externalVaults);
+          this.display();
+        }));
+      new obsidian.Setting(el)
+        .setName(tr('MD 目录'))
+        .addText((t) => t.setValue(v.mdDir || '')
+          .onChange((x) => { v.mdDir = x.trim(); save('externalVaults', extras); }));
+      new obsidian.Setting(el)
+        .setName(tr('附件目录'))
+        .addText((t) => t.setValue(v.assetDir || '')
+          .onChange((x) => { v.assetDir = x.trim(); save('externalVaults', extras); }));
+    }
+    new obsidian.Setting(el)
+      .setDesc(tr('每个外部库有独立的 MD 和附件目录；在顶部「当前外部库」切换'))
+      .addButton((b) => b.setButtonText(tr('添加外部库')).setCta().onClick(async () => {
+        const n = (this.plugin.settings.externalVaults || []).length + 2;
+        const item = {
+          id: 'vault-' + Date.now(),
+          name: tr('外部库') + ' ' + n,
+          mdDir: '../External Vault ' + n,
+          assetDir: '../External Vault ' + n + '/attachments',
+        };
+        this.plugin.settings.externalVaults = (this.plugin.settings.externalVaults || []).concat([item]);
+        await save('externalVaults', this.plugin.settings.externalVaults);
+        this.display();
+      }));
 
     new obsidian.Setting(el)
       .setName(tr('接管非图片附件'))
@@ -4008,10 +4167,18 @@ class ExternalVaultView extends obsidian.ItemView {
     }
     for (const f of rows) {
       const row = this.listEl.createDiv({ cls: 'ev-panel-row' });
-      row.createDiv({ cls: 'ev-panel-name', text: path.basename(f.abs, '.md') });
+      const kindLabel = f.kind === 'md' ? 'MD'
+        : (f.kind === 'pdf' ? 'PDF' : (f.kind === 'image' ? 'IMG' : 'FILE'));
+      const nameLine = row.createDiv({ cls: 'ev-panel-name' });
+      nameLine.createSpan({ cls: 'ev-files-kind', text: kindLabel });
+      nameLine.createSpan({ text: path.basename(f.abs) });
       const bits = [];
-      if (f.aliases && f.aliases.length) bits.push(f.aliases.join(' / '));
-      bits.push(f.assets ? f.assets + tr(' 个附件') : tr('无附件'));
+      if (f.kind === 'md') {
+        if (f.aliases && f.aliases.length) bits.push(f.aliases.join(' / '));
+        bits.push(f.assets ? f.assets + tr(' 个附件') : tr('无附件'));
+      } else {
+        bits.push(formatBytes(f.size));
+      }
       row.createDiv({ cls: 'ev-panel-meta', text: bits.join(' · ') });
       row.addEventListener('click', () => {
         this.listEl.querySelectorAll('.ev-panel-row.is-active')
@@ -4019,7 +4186,9 @@ class ExternalVaultView extends obsidian.ItemView {
         row.classList.add('is-active');
       });
       row.addEventListener('dblclick', () => {
-        this.plugin.guard(() => this.plugin.openExternalMd(f.abs));
+        this.plugin.guard(() => (f.kind === 'md'
+          ? this.plugin.openExternalMd(f.abs)
+          : this.plugin.openExternalAny(f.abs)));
       });
       row.addEventListener('contextmenu', (e) => {
         e.preventDefault();
@@ -4036,10 +4205,12 @@ class ExternalVaultView extends obsidian.ItemView {
       .onClick(() => this.plugin.guard(() => this.plugin.openExternalMd(f.abs))));
     menu.addItem((i) => i.setTitle(tr('在 Finder 中显示')).setIcon('lucide-folder-open')
       .onClick(() => this.plugin.guard(() => this.plugin.revealExternalFile(f.abs))));
-    menu.addItem((i) => i.setTitle(tr('移入 Vault（含附件）')).setIcon('lucide-log-in')
-      .onClick(() => this.plugin.guard(() => this.plugin.contextMoveIn(file))));
-    menu.addItem((i) => i.setTitle(tr('删除库外 MD（含附件）')).setIcon('lucide-trash')
-      .onClick(() => this.plugin.guard(() => this.plugin.promptDeleteExternalNote(file))));
+    if (f.kind === 'md') {
+      menu.addItem((i) => i.setTitle(tr('移入 Vault（含附件）')).setIcon('lucide-log-in')
+        .onClick(() => this.plugin.guard(() => this.plugin.contextMoveIn(file))));
+      menu.addItem((i) => i.setTitle(tr('删除库外 MD（含附件）')).setIcon('lucide-trash')
+        .onClick(() => this.plugin.guard(() => this.plugin.promptDeleteExternalNote(file))));
+    }
     menu.showAtMouseEvent(evt);
   }
 }

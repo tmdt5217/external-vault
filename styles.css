@@ -193,6 +193,18 @@ span.cm-hmd-internal-link.ev-external-link .cm-underline,
 .ev-files-row.is-openable { cursor: pointer; user-select: none; }
 .ev-files-row.is-active { background: var(--background-modifier-hover); }
 .ev-files-alias { font-size: var(--font-ui-smaller); color: var(--text-muted); }
+.ev-files-kind {
+  display: inline-block;
+  min-width: 30px;
+  margin-right: 6px;
+  padding: 0 4px;
+  border-radius: 4px;
+  font-size: 10px;
+  line-height: 16px;
+  text-align: center;
+  color: var(--text-muted);
+  background: var(--background-modifier-border);
+}
 .ev-finder-btn { margin-right: auto; }
 .ev-files-row input[type='checkbox'] { margin-top: 3px; flex: none; }
 .ev-files-main { flex: 1; min-width: 0; }
