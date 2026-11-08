@@ -3131,6 +3131,23 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       };
       try { await this.saveData(this.settings); } catch (e) { /* noop */ }
     }
+    // 移入后把原库外标签指向库内版本，避免标签被关闭或另开新标签
+    if (direction === 'in') {
+      for (const p of plans) {
+        const rel = path.relative(vRoot, p.dest).split(path.sep).join('/');
+        let tf = null;
+        try { tf = this.app.vault.getFileByPath(rel) || this.app.vault.getAbstractFileByPath(rel); }
+        catch (e) { /* noop */ }
+        if (!tf || tf.children) continue;
+        const oldLeaf = this.findLeafByFile((f) => externalAbsFromFile(f, this.app) === p.src);
+        if (!oldLeaf) continue;
+        const prev = this.app.workspace.activeLeaf;
+        try { await oldLeaf.openFile(tf, { active: false }); } catch (e) { /* noop */ }
+        if (prev && prev !== oldLeaf) {
+          try { this.app.workspace.setActiveLeaf(prev, { focus: true }); } catch (e) { /* noop */ }
+        }
+      }
+    }
     // 移动完成后立即刷新右侧库外面板
     this.refreshExternalPanels();
     return {
