@@ -1768,6 +1768,23 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     } catch (e) { /* noop */ }
   }
 
+  /** 移动/删除后立刻从索引里去掉已消失的源文件，保证面板与磁盘一致 */
+  updateIndexAfterMove(records) {
+    const p = this.externalIndexPath();
+    if (!p || !fs.existsSync(p)) return;
+    try {
+      const idx = JSON.parse(fs.readFileSync(p, 'utf8'));
+      const gone = new Set((records || []).map((r) => path.resolve(r.src)));
+      idx.files = (idx.files || []).filter((f) => !gone.has(path.resolve(f.abs)));
+      fs.writeFileSync(p, JSON.stringify(idx), 'utf8');
+      if (this._externalNameCache) {
+        for (const f of (idx.files || [])) {
+          if (f.kind !== 'md') continue;
+        }
+      }
+    } catch (e) { /* noop */ }
+  }
+
   /** 用文件列表填充文件名 / 别名缓存 */
   hydrateExternalCaches(files) {
     if (!this._externalNameCache) this._externalNameCache = new Map();
@@ -3388,7 +3405,8 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
         }
       }
     }
-    // 移动完成后立即刷新右侧库外面板
+    // 先把移走的文件从索引里去掉，再刷新面板，避免列表与磁盘不一致
+    this.updateIndexAfterMove(plans);
     this.refreshExternalPanels();
     return {
       notes: plans.length, assets: assetMap.size, missingRefs,
