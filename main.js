@@ -1966,7 +1966,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
             } catch (e) { return m; }
           });
         } else {
-          next = next.replace(/\[([^\]]*)\]\(([^)]+)\)/g, (m, text, href) => {
+          next = next.replace(/\[([^\]]*)\]\(((?:[^()\n]|\([^()\n]*\))+)\)/g, (m, text, href) => {
             try {
               const decoded = decodeURIComponent(href.replace(/^<|>$/g, ''));
               // 按文件名匹配，不依赖相对路径从哪一层算起
