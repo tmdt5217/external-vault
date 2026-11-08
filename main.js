@@ -4907,6 +4907,12 @@ class ExternalVaultView extends obsidian.ItemView {
     this.contentEl.prepend(bar);
   }
 
+  onClose() {
+    try { if (this._watcher) this._watcher.close(); } catch (e) { /* noop */ }
+    try { window.clearTimeout(this._watchTimer); } catch (e) { /* noop */ }
+    this.contentEl.empty();
+  }
+
   async refresh() {
     try { this.files = await this.plugin.listExternalEntries(); }
     catch (e) { this.files = []; }
