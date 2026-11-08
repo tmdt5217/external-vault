@@ -178,6 +178,8 @@ span.cm-hmd-internal-link.ev-external-link .cm-underline,
 .ev-files-row:hover { background: var(--background-modifier-hover); }
 .ev-files-row.is-openable { cursor: pointer; user-select: none; }
 .ev-files-row.is-active { background: var(--background-modifier-hover); }
+.ev-files-alias { font-size: var(--font-ui-smaller); color: var(--text-muted); }
+.ev-finder-btn { margin-right: auto; }
 .ev-files-row input[type='checkbox'] { margin-top: 3px; flex: none; }
 .ev-files-main { flex: 1; min-width: 0; }
 .ev-files-name {

@@ -173,6 +173,9 @@ const EN = {
   '语言': 'Language',
   '界面语言；切换后建议重载插件（Cmd+R）以更新命令名': 'Interface language. Reload the plugin (Cmd+R) after switching to update command names.',
   '跟随 Obsidian': 'Follow Obsidian',
+  '打开 Finder': 'Open in Finder',
+  '搜索文件名、路径或别名…': 'Search name, path or alias…',
+  '别名：': 'Aliases: ',
   // 命令
   '库外文件：新建 Markdown': 'External files: New Markdown',
   '库外文件：打开 External Vault 菜单': 'External files: Open External Vault menu',
@@ -836,6 +839,37 @@ function rewriteContent(content, items, assetMap, relAssetDir, style) {
     out = out.slice(0, it.start) + rep + out.slice(it.end);
   }
   return out;
+}
+
+/** 从 YAML frontmatter 提取 aliases / alias（支持行内数组与块状列表） */
+function parseFrontmatterAliases(text) {
+  const fm = String(text || '').match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (!fm) return [];
+  const body = fm[1];
+  const out = [];
+  const inline = body.match(/^(?:aliases|alias)\s*:\s*(.+)$/mi);
+  if (inline) {
+    const raw = inline[1].trim();
+    if (raw.startsWith('[')) {
+      raw.replace(/^\[|\]$/g, '').split(',').forEach((x) => {
+        const v = x.trim().replace(/^['"]|['"]$/g, '');
+        if (v) out.push(v);
+      });
+    } else if (raw) {
+      out.push(raw.replace(/^['"]|['"]$/g, ''));
+    }
+  }
+  const block = body.match(/^(?:aliases|alias)\s*:\s*\r?\n((?:[ \t]*-[ \t]*.+\r?\n?)+)/mi);
+  if (block) {
+    block[1].split(/\r?\n/).forEach((line) => {
+      const m = line.match(/^[ \t]*-[ \t]*(.+)$/);
+      if (m) {
+        const v = m[1].trim().replace(/^['"]|['"]$/g, '');
+        if (v) out.push(v);
+      }
+    });
+  }
+  return Array.from(new Set(out));
 }
 
 async function listMarkdownFiles(dir, recursive, maxDepth) {
@@ -2961,7 +2995,8 @@ class ExternalFilesModal extends obsidian.Modal {
     const dir = this.plugin.externalMdDir();
     let list = [];
     try { list = await listMarkdownFiles(dir, true, 8); } catch (e) { list = []; }
-    this.files = list.map((abs) => {
+    const files = [];
+    for (const abs of list) {
       let st = null;
       try { st = fs.statSync(abs); } catch (e) { /* noop */ }
       let assets = 0;
@@ -2969,13 +3004,18 @@ class ExternalFilesModal extends obsidian.Modal {
         assets = this.plugin.assetPathsIn(abs)
           .filter((a) => !isInsideVault(a, this.app) && fs.existsSync(a)).length;
       } catch (e) { /* noop */ }
-      return {
+      let aliases = [];
+      try { aliases = parseFrontmatterAliases(await fs.promises.readFile(abs, 'utf8')); }
+      catch (e) { /* noop */ }
+      files.push({
         abs,
         rel: path.relative(dir, abs).split(path.sep).join('/'),
         mtime: st ? st.mtimeMs : 0,
         assets,
-      };
-    }).sort((a, b) => b.mtime - a.mtime);
+        aliases,
+      });
+    }
+    this.files = files.sort((a, b) => b.mtime - a.mtime);
     this.render();
   }
 
@@ -2996,7 +3036,7 @@ class ExternalFilesModal extends obsidian.Modal {
     });
     const searchWrap = head.createDiv({ cls: 'ev-files-search' });
     const search = searchWrap.createEl('input', {
-      type: 'search', placeholder: '搜索文件名或路径…',
+      type: 'search', placeholder: tr('搜索文件名、路径或别名…'),
     });
     search.value = this.query || '';
     search.addEventListener('input', () => {
@@ -3031,6 +3071,11 @@ class ExternalFilesModal extends obsidian.Modal {
     this.renderList();
 
     const buttons = el.createDiv({ cls: 'ev-buttons' });
+    const finder = buttons.createEl('button', { text: tr('打开 Finder'), cls: 'ev-finder-btn' });
+    finder.addEventListener('click', () => {
+      this.close();
+      this.plugin.guard(() => this.plugin.revealExternalVault());
+    });
     if (!opening) {
       this.okBtn = buttons.createEl('button', {
         text: picking ? '插入' : '删除选中（含附件）',
@@ -3054,7 +3099,9 @@ class ExternalFilesModal extends obsidian.Modal {
     const q = String(this.query || '').trim().toLowerCase();
     if (!q) return this.files;
     return this.files.filter((f) =>
-      f.rel.toLowerCase().includes(q) || path.basename(f.abs).toLowerCase().includes(q));
+      f.rel.toLowerCase().includes(q) ||
+      path.basename(f.abs).toLowerCase().includes(q) ||
+      (f.aliases || []).some((a) => String(a).toLowerCase().includes(q)));
   }
 
   /** 只重建列表，让搜索框保持焦点与输入法状态 */
@@ -3087,6 +3134,9 @@ class ExternalFilesModal extends obsidian.Modal {
       const main = row.createDiv({ cls: 'ev-files-main' });
       main.createDiv({ cls: 'ev-files-name', text: path.basename(f.abs) });
       main.createDiv({ cls: 'ev-files-path', text: f.rel });
+      if (f.aliases && f.aliases.length) {
+        main.createDiv({ cls: 'ev-files-alias', text: tr('别名：') + f.aliases.join(' / ') });
+      }
       const meta = row.createDiv({ cls: 'ev-files-meta' });
       meta.textContent = (f.assets ? f.assets + ' 个附件' : '无附件') +
         (f.mtime ? ' · ' + new Date(f.mtime).toLocaleString() : '');
