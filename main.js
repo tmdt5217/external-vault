@@ -2182,10 +2182,18 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     const rewriteOne = async (t) => {
       if (records.some((r) => path.resolve(r.src) === path.resolve(t.abs))) return;
       let content = '';
+      let editorView = null;
       try {
-        content = t.file
-          ? await this.app.vault.read(t.file)
-          : await fs.promises.readFile(t.abs, 'utf8');
+        if (t.file) {
+          // 优先用编辑器里的实时内容，未保存的修改也能被改写
+          for (const leaf of this.app.workspace.getLeavesOfType('markdown')) {
+            const v = leaf.view;
+            if (v && v.file && v.file.path === t.file.path && v.editor) { editorView = v; break; }
+          }
+          content = editorView ? editorView.editor.getValue() : await this.app.vault.read(t.file);
+        } else {
+          content = await fs.promises.readFile(t.abs, 'utf8');
+        }
       } catch (e) { return; }
       let next = content;
       const referrerAbs = t.abs;
