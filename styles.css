@@ -125,7 +125,16 @@ span.cm-hmd-internal-link.ev-external-link .cm-underline,
 .ev-panel-head { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; }
 .ev-panel-head input { flex: 1; min-width: 0; }
 .ev-panel-actions { display: flex; gap: 4px; }
-.ev-panel-toolbar { display: flex; gap: 2px; align-items: center; margin-bottom: 4px; }
+.ev-panel-toolbar {
+  display: flex;
+  gap: 2px;
+  align-items: center;
+  margin-bottom: 4px;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.ev-panel:hover .ev-panel-toolbar,
+.ev-panel-toolbar:focus-within { opacity: 1; }
 .ev-panel-btn { padding: 4px; height: auto; }
 .ev-panel-btn svg { width: 16px; height: 16px; }
 /* 列表复用 Obsidian 文件浏览器的结构类（nav-files-container / tree-item / nav-file-title），
