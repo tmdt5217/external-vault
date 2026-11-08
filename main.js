@@ -212,6 +212,15 @@ const EN = {
   '添加外部库': 'Add external vault',
   '外部库': 'External vault',
   '无法打开：': 'Cannot open: ',
+  '库外文件：撤销上一次移动': 'External files: Undo last move',
+  '撤销上一次移动': 'Undo last move',
+  '没有可撤销的移动记录': 'No move to undo',
+  '已撤销上一次移动': 'Last move undone',
+  '删除目标文件': 'Target files removed',
+  '恢复源文件': 'Source files restored',
+  '失败': 'Failed',
+  '废纸篓中未找到': 'not found in Trash',
+  '当时关闭了废纸篓，源文件可能无法恢复': 'The system trash was disabled then; source files may not be recoverable.',
   // 命令
   '库外文件：新建 Markdown': 'External files: New Markdown',
   '库外文件：打开 External Vault 菜单': 'External files: Open External Vault menu',
@@ -879,6 +888,27 @@ function rewriteContent(content, items, assetMap, relAssetDir, style) {
   return out;
 }
 
+/** macOS 废纸篓里找同名文件（冲突时会变成「名字 2.md」）；找不到返回 null */
+function findTrashItem(srcPath) {
+  if (process.platform !== 'darwin') return null;
+  const trashDir = path.join(os.homedir(), '.Trash');
+  const base = path.basename(srcPath);
+  const ext = path.extname(base);
+  const stem = base.slice(0, base.length - ext.length);
+  let names = [];
+  try { names = fs.readdirSync(trashDir); } catch (e) { return null; }
+  const exact = path.join(trashDir, base);
+  if (fs.existsSync(exact)) return exact;
+  for (const name of names) {
+    if (!name.startsWith(stem + ' ') || !name.endsWith(ext)) continue;
+    const middle = name.slice(stem.length + 1, name.length - ext.length);
+    if (!/^\d+$/.test(middle)) continue;
+    const p = path.join(trashDir, name);
+    if (fs.existsSync(p)) return p;
+  }
+  return null;
+}
+
 /** 文件大小的人类可读写法 */
 function formatBytes(n) {
   const v = Number(n) || 0;
@@ -1087,6 +1117,11 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       id: 'cleanup-orphan-assets',
       name: tr('库外文件：清理孤儿附件'),
       callback: () => this.guard(() => this.openOrphanAssetsModal()),
+    });
+    this.addCommand({
+      id: 'undo-last-move',
+      name: tr('库外文件：撤销上一次移动'),
+      callback: () => this.guard(() => this.undoLastMove()),
     });
     this.addCommand({
       id: 'insert-external-link',
@@ -1509,6 +1544,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       });
       add('管理库外文件…', 'lucide-files', () => this.openExternalFilesModal());
       add('清理孤儿附件…', 'lucide-trash-2', () => this.openOrphanAssetsModal());
+      add('撤销上一次移动', 'lucide-undo-2', () => this.undoLastMove());
       menu.addSeparator();
       const notes = listExternalMdFiles(mdDir, this.settings.ribbonMaxNotes);
       if (!notes.length) {
@@ -1669,6 +1705,57 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
   /** 打开孤儿附件清理弹窗 */
   openOrphanAssetsModal() {
     new OrphanAssetsModal(this.app, this).open();
+  }
+
+  /** 撤销上一次移入/移出：删除目标文件，再从系统废纸篓把源文件移回原路径 */
+  async undoLastMove() {
+    const rec = this.settings.lastMove;
+    if (!rec || (!(rec.notes && rec.notes.length) && !(rec.assets && rec.assets.length))) {
+      throw new Error(tr('没有可撤销的移动记录'));
+    }
+    const items = [].concat(rec.notes || []).concat(rec.assets || []);
+    const res = { removed: 0, restored: 0, failed: [] };
+    for (const item of items) {
+      if (!item.dest || !fs.existsSync(item.dest)) continue;
+      try {
+        const r = await cutSourceFiles([item.dest], true);
+        res.removed += r.removed;
+        if (r.failed.length) res.failed.push(...r.failed);
+      } catch (e) {
+        res.failed.push({ path: item.dest, message: e.message });
+      }
+    }
+    for (const item of items) {
+      if (!item.src) continue;
+      if (fs.existsSync(item.src)) { res.restored += 1; continue; }
+      const found = findTrashItem(item.src);
+      if (!found) {
+        res.failed.push({ path: item.src, message: tr('废纸篓中未找到') });
+        continue;
+      }
+      try {
+        await fs.promises.mkdir(path.dirname(item.src), { recursive: true });
+        await fs.promises.rename(found, item.src);
+        res.restored += 1;
+      } catch (e) {
+        res.failed.push({ path: item.src, message: e.message });
+      }
+    }
+    this.settings.lastMove = null;
+    await this.saveData(this.settings);
+    const lines = [
+      tr('已撤销上一次移动'),
+      tr('删除目标文件') + '：' + res.removed + ' ' + tr('个'),
+      tr('恢复源文件') + '：' + res.restored + ' ' + tr('个'),
+    ];
+    if (rec.trashed === false) {
+      lines.push(tr('当时关闭了废纸篓，源文件可能无法恢复'));
+    }
+    if (res.failed.length) {
+      lines.push(tr('失败') + '：' + res.failed.length + ' ' + tr('个') +
+        '（' + res.failed[0].path + '）');
+    }
+    new obsidian.Notice(lines.join('\n'), 12000);
   }
 
   /** 在右侧边栏打开常驻的库外文件面板 */
@@ -2623,6 +2710,16 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     new obsidian.Notice(summary, 10000);
     console.log(LOG, summary);
     if (missingRefs) console.warn(LOG, missingRefs + ' 个附件引用找不到源文件，链接未重写');
+    if (doMove && cut.removed > 0) {
+      this.settings.lastMove = {
+        ts: Date.now(),
+        direction,
+        trashed: !!this.settings.cutUseTrash,
+        notes: plans.map((p) => ({ src: p.src, dest: p.dest })),
+        assets: Array.from(assetMap.entries()).map(([src, dest]) => ({ src, dest })),
+      };
+      try { await this.saveData(this.settings); } catch (e) { /* noop */ }
+    }
     return {
       notes: plans.length, assets: assetMap.size, missingRefs,
       removed: cut.removed, trashed: cut.trashed, failed: cut.failed, skipped, opened,
