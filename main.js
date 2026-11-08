@@ -4376,7 +4376,7 @@ class ExternalVaultView extends obsidian.ItemView {
     this.query = '';
     this.listEl = null;
     this.sortBy = 'mtime';
-    this.collapseAll = false;
+    this.collapseAll = true; // 默认折叠文件夹，避免大量附件把 MD 挤到下面
   }
 
   getViewType() { return VIEW_TYPE; }
