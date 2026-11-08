@@ -65,3 +65,67 @@ textarea.efi-template-textarea {
 
 /* 如以后要给库外标签页加视觉标记：
    .view-header-title-parent.mod-external-file { } */
+
+/* 库外文件管理器（ExternalFilesModal） */
+.external-file-image-modal.efi-files-modal {
+  width: min(760px, 92vw);
+}
+.efi-files-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 6px 0 10px;
+}
+.efi-files-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+.efi-files-count {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+.efi-files-list {
+  max-height: 46vh;
+  overflow-y: auto;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+}
+.efi-files-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 11px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  cursor: pointer;
+}
+.efi-files-row:last-child { border-bottom: none; }
+.efi-files-row:hover { background: var(--background-modifier-hover); }
+.efi-files-row input[type='checkbox'] { margin-top: 3px; flex: none; }
+.efi-files-main { flex: 1; min-width: 0; }
+.efi-files-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.efi-files-path {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.efi-files-meta {
+  flex: none;
+  margin-top: 2px;
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+  white-space: nowrap;
+}
+.efi-files-empty {
+  padding: 26px 12px;
+  text-align: center;
+  color: var(--text-muted);
+}

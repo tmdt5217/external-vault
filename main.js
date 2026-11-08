@@ -1,7 +1,7 @@
 'use strict';
 
 /*
- * external-file-image-pxm  v1.4.9
+ * external-file-image-pxm  v1.5.0
  *
  * 用途：Obsidian 1.14+ 编辑「仓库外的 Markdown 文件」时：
  *   1) 命令「新建库外 Markdown 文件」→ 在「库外 MD 目录」里创建 .md 并尝试打开
@@ -852,6 +852,11 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
         });
       }),
     });
+    this.addCommand({
+      id: 'manage-external-files',
+      name: '库外文件：查看全部并批量删除（含附件）',
+      callback: () => this.guard(() => this.openExternalFilesModal()),
+    });
 
     this.addCommand({
       id: 'fix-wiki-image-links',
@@ -1149,6 +1154,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
         await navigator.clipboard.writeText(mdDir);
         if (this.settings.showNotice) new obsidian.Notice('已复制：' + mdDir);
       });
+      add('管理库外文件…', 'lucide-files', () => this.openExternalFilesModal());
       menu.addSeparator();
       const notes = listExternalMdFiles(mdDir, this.settings.ribbonMaxNotes);
       if (!notes.length) {
@@ -1171,6 +1177,11 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     } catch (e) {
       this.reportError(new Error('打开 External Vault 菜单失败：' + e.message));
     }
+  }
+
+  /** 库外文件管理器：查看全部 + 多选批量删除 */
+  openExternalFilesModal() {
+    new ExternalFilesModal(this.app, this).open();
   }
 
   /**
@@ -2093,18 +2104,22 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     });
   }
 
-  /** 这些附件是否还被库外目录里的其他 MD 引用（递归扫描，不读库内索引） */
+  /**
+   * 这些附件是否还被库外目录里的其他 MD 引用（递归扫描，不读库内索引）。
+   * excludeMdAbs 支持单个路径或路径数组；批量删除时要把「所有待删笔记」一起排除。
+   */
   async assetsUsedElsewhere(assets, excludeMdAbs) {
     const used = new Set();
     const list = Array.from(new Set(assets || [])).filter((a) => fs.existsSync(a));
     if (!list.length) return used;
-    const exclude = path.resolve(excludeMdAbs);
+    const rawExclude = Array.isArray(excludeMdAbs) ? excludeMdAbs : [excludeMdAbs];
+    const excluded = new Set(rawExclude.filter(Boolean).map((p) => path.resolve(p)));
     const wanted = new Set(list.map((a) => path.resolve(a)));
     let mds = [];
     try { mds = await listMarkdownFiles(this.externalMdDir(), true, 8); }
     catch (e) { this.dbg('扫描库外 MD 失败，按「全部共享」处理', e.message); return new Set(list); }
     for (const md of mds) {
-      if (path.resolve(md) === exclude) continue;
+      if (excluded.has(path.resolve(md))) continue;
       let text = '';
       try { text = await fs.promises.readFile(md, 'utf8'); } catch (e) { continue; }
       for (const it of collectLocalAssets(text, md, null)) {
@@ -2115,48 +2130,81 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     return used;
   }
 
-  /** 确认弹窗：先算清会删哪些附件，再由用户点确认 */
+  /** 批量删除计划：只统计库外、存在、且不被「未选中」笔记引用的附件 */
+  async deletePlanFor(srcs) {
+    const list = Array.from(new Set((srcs || []).map((p) => path.resolve(p))));
+    const assets = new Set();
+    for (const src of list) {
+      for (const a of this.assetPathsIn(src)) {
+        if (!isInsideVault(a, this.app) && fs.existsSync(a)) assets.add(a);
+      }
+    }
+    const all = Array.from(assets);
+    const shared = await this.assetsUsedElsewhere(all, list);
+    return { assets: all, shared, doomed: all.filter((a) => !shared.has(a)) };
+  }
+
+  /** 单篇确认弹窗：先算清会删哪些附件，再由用户点确认 */
   async promptDeleteExternalNote(file) {
     const src = externalAbsFromFile(file, this.app);
     if (!src) throw new Error('无法解析这个库外文件的绝对路径');
     if (!fs.existsSync(src)) throw new Error('库外文件不存在：' + src);
-    const assets = this.assetPathsIn(src)
-      .filter((a) => !isInsideVault(a, this.app) && fs.existsSync(a));
-    const shared = await this.assetsUsedElsewhere(assets, src);
-    new DeleteExternalNoteModal(this.app, this, src, assets, shared).open();
+    const plan = await this.deletePlanFor([src]);
+    new DeleteExternalNoteModal(this.app, this, src, plan.assets, plan.shared).open();
   }
 
-  /** 删除库外 MD：先删 MD，成功后再删未被其他笔记引用的库外附件 */
+  /** 批量删除库外 MD；附件只删「只被这些笔记引用」的库外文件 */
+  async deleteExternalNotes(srcs) {
+    const list = Array.from(new Set((srcs || []).map((p) => path.resolve(p))))
+      .filter((p) => fs.existsSync(p));
+    if (!list.length) throw new Error('没有可删除的库外 Markdown 文件');
+
+    // 未保存的编辑器内容先落盘，避免删掉后又被写回
+    for (const src of list) {
+      this.flushOpenEditor(src, (v) => externalAbsFromFile(v.file, this.app) === src);
+    }
+    const plan = await this.deletePlanFor(list);
+
+    const mdRes = await cutSourceFiles(list, this.settings.cutUseTrash);
+    const failedMd = new Set(mdRes.failed.map((f) => path.resolve(f.path)));
+    const deleted = list.filter((p) => !failedMd.has(p));
+
+    // 删除失败的 MD 仍在引用附件，这些附件必须留下
+    const keepByFailed = new Set();
+    for (const src of failedMd) {
+      for (const a of this.assetPathsIn(src)) keepByFailed.add(path.resolve(a));
+    }
+    const toDelete = plan.doomed.filter((a) => !keepByFailed.has(path.resolve(a)));
+
+    for (const src of deleted) {
+      this.detachLeaves((view) => externalAbsFromFile(view.file, this.app) === src);
+    }
+    const assetRes = toDelete.length
+      ? await cutSourceFiles(toDelete, this.settings.cutUseTrash)
+      : { removed: 0, trashed: 0, failed: [] };
+
+    const lines = ['已删除 ' + deleted.length + ' 篇库外 MD' +
+      (failedMd.size ? '（' + failedMd.size + ' 篇删除失败）' : '')];
+    lines.push('附件：删除 ' + assetRes.removed + ' 个' +
+      (plan.shared.size ? '，保留 ' + plan.shared.size + ' 个（仍被其他笔记引用）' : ''));
+    if (assetRes.failed.length) lines.push(assetRes.failed.length + ' 个附件删除失败，已留在原处');
+    new obsidian.Notice(lines.join('\n'), 8000);
+
+    return {
+      notes: deleted.length,
+      removed: assetRes.removed,
+      kept: plan.shared.size,
+      failed: mdRes.failed.concat(assetRes.failed),
+    };
+  }
+
+  /** 单篇删除：右键菜单 / 命令入口 */
   async deleteExternalNote(file) {
     const src = externalAbsFromFile(file, this.app);
     if (!src) throw new Error('无法解析这个库外文件的绝对路径');
     if (!fs.existsSync(src)) throw new Error('库外文件不存在：' + src);
-
-    // 未保存的编辑器内容先落盘，避免删掉后又被写回
-    this.flushOpenEditor(src, (v) => externalAbsFromFile(v.file, this.app) === src);
-
-    const assets = this.assetPathsIn(src)
-      .filter((a) => !isInsideVault(a, this.app) && fs.existsSync(a));
-    const shared = await this.assetsUsedElsewhere(assets, src);
-    const doomed = assets.filter((a) => !shared.has(a));
-
-    const mdRes = await cutSourceFiles([src], this.settings.cutUseTrash);
-    if (!mdRes.removed) {
-      throw new Error('删除库外 MD 失败：' +
-        ((mdRes.failed[0] && mdRes.failed[0].message) || '未知错误'));
-    }
-    this.detachLeaves((view) => externalAbsFromFile(view.file, this.app) === src);
-
-    const assetRes = doomed.length
-      ? await cutSourceFiles(doomed, this.settings.cutUseTrash)
-      : { removed: 0, trashed: 0, failed: [] };
-
-    const lines = ['已删除 ' + path.basename(src)];
-    lines.push('附件：删除 ' + assetRes.removed + ' 个' +
-      (shared.size ? '，保留 ' + shared.size + ' 个（仍被其他笔记引用）' : ''));
-    if (assetRes.failed.length) lines.push(assetRes.failed.length + ' 个附件删除失败，已留在原处');
-    new obsidian.Notice(lines.join('\n'), 8000);
-    return { md: src, removed: assetRes.removed, kept: shared.size, failed: assetRes.failed };
+    const r = await this.deleteExternalNotes([src]);
+    return { md: src, removed: r.removed, kept: r.kept, failed: r.failed };
   }
 
   /** 探测不到路径时用它导出真实数据结构，便于按版本适配 */
@@ -2315,6 +2363,158 @@ class DeleteExternalNoteModal extends obsidian.Modal {
     el.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') this.close();
     });
+  }
+
+  onClose() { this.contentEl.empty(); }
+}
+
+class ExternalFilesModal extends obsidian.Modal {
+  constructor(app, plugin) {
+    super(app);
+    this.plugin = plugin;
+    this.files = [];
+    this.selected = new Set();
+    this.stage = 'list';
+    this.confirmData = null;
+  }
+
+  async onOpen() {
+    this.render();
+    await this.load();
+  }
+
+  async load() {
+    const dir = this.plugin.externalMdDir();
+    let list = [];
+    try { list = await listMarkdownFiles(dir, true, 8); } catch (e) { list = []; }
+    this.files = list.map((abs) => {
+      let st = null;
+      try { st = fs.statSync(abs); } catch (e) { /* noop */ }
+      let assets = 0;
+      try {
+        assets = this.plugin.assetPathsIn(abs)
+          .filter((a) => !isInsideVault(a, this.app) && fs.existsSync(a)).length;
+      } catch (e) { /* noop */ }
+      return {
+        abs,
+        rel: path.relative(dir, abs).split(path.sep).join('/'),
+        mtime: st ? st.mtimeMs : 0,
+        assets,
+      };
+    }).sort((a, b) => b.mtime - a.mtime);
+    this.render();
+  }
+
+  render() {
+    const el = this.contentEl;
+    el.empty();
+    el.addClass('external-file-image-modal');
+    el.addClass('efi-files-modal');
+    if (this.stage === 'confirm' && this.confirmData) {
+      this.renderConfirm(el);
+      return;
+    }
+
+    el.createEl('h2', { text: '库外文件' });
+    el.createEl('p', {
+      cls: 'setting-item-description',
+      text: '目录：' + this.plugin.externalMdDir() + '　共 ' + this.files.length + ' 篇',
+    });
+
+    const toolbar = el.createDiv({ cls: 'efi-files-toolbar' });
+    const all = toolbar.createEl('label', { cls: 'efi-files-all' });
+    const allBox = all.createEl('input', { type: 'checkbox' });
+    allBox.checked = this.files.length > 0 && this.selected.size === this.files.length;
+    allBox.addEventListener('change', () => {
+      if (allBox.checked) this.files.forEach((f) => this.selected.add(f.abs));
+      else this.selected.clear();
+      this.render();
+    });
+    all.createSpan({ text: '全选' });
+    toolbar.createSpan({ cls: 'efi-files-count', text: '已选 ' + this.selected.size + ' 篇' });
+
+    const listEl = el.createDiv({ cls: 'efi-files-list' });
+    if (!this.files.length) {
+      listEl.createDiv({ cls: 'efi-files-empty', text: 'External Vault 里还没有 Markdown 文件' });
+    }
+    for (const f of this.files) {
+      const row = listEl.createEl('label', { cls: 'efi-files-row' });
+      const box = row.createEl('input', { type: 'checkbox' });
+      box.checked = this.selected.has(f.abs);
+      box.addEventListener('change', () => {
+        if (box.checked) this.selected.add(f.abs);
+        else this.selected.delete(f.abs);
+        this.render();
+      });
+      const main = row.createDiv({ cls: 'efi-files-main' });
+      main.createDiv({ cls: 'efi-files-name', text: path.basename(f.abs) });
+      main.createDiv({ cls: 'efi-files-path', text: f.rel });
+      const meta = row.createDiv({ cls: 'efi-files-meta' });
+      meta.textContent = (f.assets ? f.assets + ' 个附件' : '无附件') +
+        (f.mtime ? ' · ' + new Date(f.mtime).toLocaleString() : '');
+    }
+
+    const buttons = el.createDiv({ cls: 'efi-buttons' });
+    const del = buttons.createEl('button', { text: '删除选中（含附件）', cls: 'mod-warning' });
+    del.disabled = this.selected.size === 0;
+    del.addEventListener('click', () => { this.prepareDelete(); });
+    const close = buttons.createEl('button', { text: '关闭' });
+    close.addEventListener('click', () => this.close());
+    el.addEventListener('keydown', (e) => { if (e.key === 'Escape') this.close(); });
+  }
+
+  async prepareDelete() {
+    const srcs = Array.from(this.selected);
+    if (!srcs.length) return;
+    try {
+      const plan = await this.plugin.deletePlanFor(srcs);
+      this.confirmData = { srcs, plan };
+      this.stage = 'confirm';
+      this.render();
+    } catch (e) { this.plugin.reportError(e); }
+  }
+
+  renderConfirm(el) {
+    const { srcs, plan } = this.confirmData;
+    el.createEl('h2', { text: '确认删除库外 MD（含附件）' });
+    const lines = [
+      '将删除：' + srcs.length + ' 篇 Markdown',
+      '将删除附件：' + plan.doomed.length + ' 个',
+    ];
+    if (plan.doomed.length) {
+      lines.push(plan.doomed.slice(0, 8).map((a) => '  · ' + path.basename(a)).join('\n') +
+        (plan.doomed.length > 8 ? '\n  · …' : ''));
+    }
+    if (plan.shared.size) lines.push('保留附件：' + plan.shared.size + ' 个（仍被其他笔记引用）');
+    el.createDiv({ cls: 'efi-preview' }).textContent = lines.join('\n');
+    el.createEl('p', {
+      cls: 'setting-item-description',
+      text: (this.plugin.settings.cutUseTrash
+        ? '文件会移到系统废纸篓，可从废纸篓找回。'
+        : '文件会直接从磁盘删除，不生成备份，不可撤销。') +
+        '只删除库外目录里的附件；库内附件一律保留。',
+    });
+
+    const buttons = el.createDiv({ cls: 'efi-buttons' });
+    const ok = buttons.createEl('button', { text: '确认删除', cls: 'mod-warning' });
+    ok.addEventListener('click', () => {
+      ok.disabled = true;
+      ok.textContent = '删除中…';
+      Promise.resolve(this.plugin.deleteExternalNotes(srcs))
+        .then(() => this.close())
+        .catch((e) => {
+          ok.disabled = false;
+          ok.textContent = '确认删除';
+          this.plugin.reportError(e);
+        });
+    });
+    const back = buttons.createEl('button', { text: '返回' });
+    back.addEventListener('click', () => {
+      this.stage = 'list';
+      this.confirmData = null;
+      this.render();
+    });
+    el.addEventListener('keydown', (e) => { if (e.key === 'Escape') this.close(); });
   }
 
   onClose() { this.contentEl.empty(); }
