@@ -178,6 +178,8 @@ const EN = {
   '搜索文件名、路径或别名…': 'Search name, path or alias…',
   '搜索文件名、路径、别名或拼音首字母…': 'Search name, path, alias or pinyin initials…',
   '搜索': 'Search',
+  '最后修改于': 'Modified ',
+  '创建于': 'Created ',
   '别名：': 'Aliases: ',
   '确认删除库外 MD（含附件）': 'Delete external note (with attachments)?',
   '库外文件：打开侧边栏面板': 'External files: Open sidebar panel',
@@ -910,6 +912,15 @@ function findTrashItem(srcPath) {
   return null;
 }
 
+/** 时间戳 → YYYY-MM-DD HH:mm */
+function fmtDateTime(ms) {
+  if (!ms) return '';
+  const d = new Date(ms);
+  const p = (n) => String(n).padStart(2, '0');
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) +
+    ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+}
+
 /** 文件大小的人类可读写法 */
 function formatBytes(n) {
   const v = Number(n) || 0;
@@ -1618,6 +1629,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
         abs,
         rel: path.relative(mdDir, abs).split(path.sep).join('/'),
         mtime: st ? st.mtimeMs : 0,
+        ctime: st ? st.birthtimeMs : 0,
         size: st ? st.size : 0,
         assets,
         aliases,
@@ -1644,6 +1656,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
           abs: p,
           rel: (prefix || '') + path.relative(base, p).split(path.sep).join('/'),
           mtime: st ? st.mtimeMs : 0,
+          ctime: st ? st.birthtimeMs : 0,
           size: st ? st.size : 0,
           assets: 0,
           aliases: [],
@@ -4375,7 +4388,15 @@ class ExternalVaultView extends obsidian.ItemView {
         cls: 'tree-item-inner nav-file-title-content',
         text: path.basename(f.abs, path.extname(f.abs)),
       });
-      content.title = f.rel;
+      const tip = [];
+      if (f.mtime) tip.push(tr('最后修改于') + ' ' + fmtDateTime(f.mtime));
+      if (f.ctime) tip.push(tr('创建于') + ' ' + fmtDateTime(f.ctime));
+      if (tip.length) {
+        title.setAttribute('aria-label', tip.join('\n'));
+        title.setAttribute('data-tooltip-position', 'right');
+      } else {
+        content.title = f.rel;
+      }
       title.addEventListener('click', () => {
         this.plugin.guard(() => (f.kind === 'md'
           ? this.plugin.openExternalMd(f.abs)
