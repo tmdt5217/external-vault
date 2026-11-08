@@ -180,6 +180,15 @@ const EN = {
   '搜索': 'Search',
   '最后修改于': 'Modified ',
   '创建于': 'Created ',
+  '新建笔记': 'New note',
+  '新建文件夹': 'New folder',
+  '文件夹名称': 'Folder name',
+  '排序': 'Sort',
+  '折叠 / 展开': 'Collapse / expand',
+  '更多': 'More',
+  '确定': 'OK',
+  '取消': 'Cancel',
+  '拿不到库外目录': 'Cannot resolve external folder',
   '别名：': 'Aliases: ',
   '确认删除库外 MD（含附件）': 'Delete external note (with attachments)?',
   '库外文件：打开侧边栏面板': 'External files: Open sidebar panel',
@@ -1802,6 +1811,25 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
   /** 打开孤儿附件清理弹窗 */
   openOrphanAssetsModal() {
     new OrphanAssetsModal(this.app, this).open();
+  }
+
+  /** 在当前外部库的 MD 目录下新建文件夹 */
+  createExternalFolder() {
+    const dir = this.externalMdDir();
+    if (!dir) {
+      new obsidian.Notice(tr('拿不到库外目录'), 5000);
+      return;
+    }
+    new TextPromptModal(this.app, tr('新建文件夹'), tr('文件夹名称'), async (name) => {
+      const safe = String(name).replace(/[\\/:*?"<>|]/g, '_').trim();
+      if (!safe) return;
+      await fs.promises.mkdir(path.join(dir, safe), { recursive: true });
+      this.app.workspace.getLeavesOfType(VIEW_TYPE).forEach((leaf) => {
+        if (leaf.view && typeof leaf.view.refresh === 'function') {
+          leaf.view.refresh().catch(() => {});
+        }
+      });
+    }).open();
   }
 
   /** 撤销上一次移入/移出：删除目标文件，再从系统废纸篓把源文件移回原路径 */
@@ -4194,6 +4222,40 @@ class ExternalFileImageSettingTab extends obsidian.PluginSettingTab {
   }
 }
 
+/** 简单的单行文本输入弹窗（新建文件夹用） */
+class TextPromptModal extends obsidian.Modal {
+  constructor(app, title, placeholder, onSubmit) {
+    super(app);
+    this.titleText = title;
+    this.placeholder = placeholder || '';
+    this.onSubmit = onSubmit;
+    this.value = '';
+  }
+
+  onOpen() {
+    this.titleEl.setText(this.titleText);
+    const el = this.contentEl;
+    el.empty();
+    const input = el.createEl('input', { type: 'text', placeholder: this.placeholder });
+    input.style.width = '100%';
+    input.addEventListener('input', () => { this.value = input.value; });
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') this.submit(); });
+    const row = el.createDiv({ cls: 'ev-buttons' });
+    const ok = row.createEl('button', { text: tr('确定'), cls: 'mod-cta' });
+    ok.addEventListener('click', () => this.submit());
+    const cancel = row.createEl('button', { text: tr('取消') });
+    cancel.addEventListener('click', () => this.close());
+    window.setTimeout(() => input.focus(), 30);
+  }
+
+  submit() {
+    const v = String(this.value || '').trim();
+    if (!v) return;
+    this.close();
+    Promise.resolve(this.onSubmit(v)).catch(() => {});
+  }
+}
+
 /** 孤儿附件清理：列出附件目录里没有任何库外笔记引用的文件 */
 class OrphanAssetsModal extends obsidian.Modal {
   constructor(app, plugin) {
@@ -4313,6 +4375,8 @@ class ExternalVaultView extends obsidian.ItemView {
     this.files = [];
     this.query = '';
     this.listEl = null;
+    this.sortBy = 'mtime';
+    this.collapseAll = false;
   }
 
   getViewType() { return VIEW_TYPE; }
@@ -4364,6 +4428,28 @@ class ExternalVaultView extends obsidian.ItemView {
     });
     if (obsidian.setIcon) obsidian.setIcon(finderBtn, 'lucide-folder-open');
     finderBtn.addEventListener('click', () => this.plugin.guard(() => this.plugin.revealExternalVault()));
+
+    const toolbar = el.createDiv({ cls: 'ev-panel-toolbar' });
+    const addIcon = (icon, label, fn) => {
+      const b = toolbar.createEl('button', {
+        cls: 'clickable-icon ev-panel-btn',
+        attr: { 'aria-label': label },
+      });
+      if (obsidian.setIcon) obsidian.setIcon(b, icon);
+      b.addEventListener('click', fn);
+    };
+    addIcon('lucide-file-plus', tr('新建笔记'), () => this.plugin.guard(() => this.plugin.openNewNoteModal()));
+    addIcon('lucide-folder-plus', tr('新建文件夹'), () => this.plugin.guard(() => this.plugin.createExternalFolder()));
+    addIcon('lucide-arrow-down-up', tr('排序'), () => {
+      this.sortBy = this.sortBy === 'name' ? 'mtime' : 'name';
+      this.renderList();
+    });
+    addIcon('lucide-chevrons-up-down', tr('折叠 / 展开'), () => {
+      this.collapseAll = !this.collapseAll;
+      this.renderList();
+    });
+    addIcon('lucide-more-horizontal', tr('更多'), (e) => this.showPanelMenu(e));
+
     this.listEl = el.createDiv({ cls: 'ev-panel-list nav-files-container' });
     this.renderList();
   }
@@ -4385,7 +4471,7 @@ class ExternalVaultView extends obsidian.ItemView {
       const ctx = this.plugin.activeExternalContext();
       if (ctx && ctx.file) this.activeAbs = path.resolve(ctx.file);
     } catch (e) { /* noop */ }
-    this.expandAll = !!q; // 搜索时自动展开，方便直接看到匹配文件
+    this.expandAll = !!q || !this.collapseAll; // 搜索时自动展开；「折叠全部」时收起
     this.renderNode(this.buildTree(rows), 0, this.listEl);
   }
 
@@ -4430,9 +4516,11 @@ class ExternalVaultView extends obsidian.ItemView {
         if (obsidian.setIcon) obsidian.setIcon(collapse, open ? 'chevron-down' : 'chevron-right');
       });
     }
-    const files = node.files.slice().sort((a, b) =>
-      path.basename(a.abs).localeCompare(path.basename(b.abs), 'zh-Hans-CN',
-        { numeric: true, sensitivity: 'base' }));
+    const files = node.files.slice().sort((a, b) => {
+      if (this.sortBy === 'mtime') return b.mtime - a.mtime;
+      return path.basename(a.abs).localeCompare(path.basename(b.abs),
+        'zh-Hans-CN', { numeric: true, sensitivity: 'base' });
+    });
     for (const f of files) {
       const active = this.activeAbs && path.resolve(f.abs) === this.activeAbs;
       const fileEl = container.createDiv({ cls: 'tree-item nav-file' });
@@ -4479,6 +4567,20 @@ class ExternalVaultView extends obsidian.ItemView {
       menu.addItem((i) => i.setTitle(tr('删除库外 MD（含附件）')).setIcon('lucide-trash')
         .onClick(() => this.plugin.guard(() => this.plugin.promptDeleteExternalNote(file))));
     }
+    menu.showAtMouseEvent(evt);
+  }
+
+  showPanelMenu(evt) {
+    if (!obsidian.Menu) return;
+    const menu = new obsidian.Menu();
+    menu.addItem((i) => i.setTitle(tr('刷新')).setIcon('lucide-refresh-cw')
+      .onClick(() => { this.refresh().catch(() => {}); }));
+    menu.addItem((i) => i.setTitle(tr('打开 Finder')).setIcon('lucide-folder-open')
+      .onClick(() => this.plugin.guard(() => this.plugin.revealExternalVault())));
+    menu.addItem((i) => i.setTitle(tr('清理孤儿附件')).setIcon('lucide-trash-2')
+      .onClick(() => this.plugin.guard(() => this.plugin.openOrphanAssetsModal())));
+    menu.addItem((i) => i.setTitle(tr('撤销上一次移动')).setIcon('lucide-undo-2')
+      .onClick(() => this.plugin.guard(() => this.plugin.undoLastMove())));
     menu.showAtMouseEvent(evt);
   }
 }
