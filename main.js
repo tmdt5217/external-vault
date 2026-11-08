@@ -177,6 +177,7 @@ const EN = {
   '打开 Finder': 'Open in Finder',
   '搜索文件名、路径或别名…': 'Search name, path or alias…',
   '搜索文件名、路径、别名或拼音首字母…': 'Search name, path, alias or pinyin initials…',
+  '搜索': 'Search',
   '别名：': 'Aliases: ',
   '确认删除库外 MD（含附件）': 'Delete external note (with attachments)?',
   '库外文件：打开侧边栏面板': 'External files: Open sidebar panel',
@@ -4281,7 +4282,7 @@ class ExternalVaultView extends obsidian.ItemView {
     el.addClass('ev-panel');
     const head = el.createDiv({ cls: 'ev-panel-head' });
     const search = head.createEl('input', {
-      type: 'search', placeholder: tr('搜索文件名、路径、别名或拼音首字母…'),
+      type: 'search', placeholder: tr('搜索'),
     });
     search.value = this.query;
     search.addEventListener('input', () => {
