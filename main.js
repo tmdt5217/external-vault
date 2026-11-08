@@ -3623,17 +3623,11 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     }
     const toDelete = plan.doomed.filter((a) => !keepByFailed.has(path.resolve(a)));
 
-    // 移入/移出后只关闭原文件对应的标签，不主动打开新笔记：
-    // 当前正在看的其他笔记不会被替换，焦点也不会跳走
-    for (const src of deleted) {
-      const wasActive = (() => {
-        try {
-          const f = this.app.workspace.getActiveFile();
-          return !!f && externalAbsFromFile(f, this.app) === src;
-        } catch (e) { return false; }
-      })();
-      this.detachLeaves((view) => externalAbsFromFile(view.file, this.app) === src);
-      if (wasActive) this.dbg('被移动的笔记原本处于活动状态，其标签已关闭');
+    // 移入时保留所有标签，只刷新面板；移出时仅关闭非活动的被移走标签
+    if (direction !== 'in') {
+      for (const src of deleted) {
+        this.detachLeaves((view) => externalAbsFromFile(view.file, this.app) === src);
+      }
     }
     toDelete.forEach((p, i) => {
       const b = this.backupFile(p, backupDir, list.length + i);
