@@ -170,13 +170,6 @@ span.cm-hmd-internal-link.ev-external-link .cm-underline,
 /* 列表复用 Obsidian 文件浏览器的结构类（nav-files-container / tree-item / nav-file-title），
    行高、缩进、hover、选中态全部由主题决定，和左侧文件列表保持一致 */
 .ev-panel-list { padding: 2px 0; }
-/* 库外文件标签：标题文字用红色，和库内标签区分（激活态也要保持红色） */
-.workspace-tab-header-inner-title.ev-external-tab,
-.workspace-tab-header.is-active .workspace-tab-header-inner-title.ev-external-tab,
-.workspace-tab-header-inner-title.ev-external-tab .workspace-tab-header-inner-title-text,
-.workspace-tab-header.is-active .workspace-tab-header-inner-title.ev-external-tab .workspace-tab-header-inner-title-text {
-  color: rgb(188, 43, 22) !important; /* #BC2B16 */
-}
 /* 悬停灰框：部分主题只在文件浏览器容器内生效，这里按同样的变量显式补上 */
 .ev-panel .nav-folder-children { padding-left: 16px; }
 .ev-panel .nav-file-title,
