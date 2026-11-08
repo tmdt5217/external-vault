@@ -3028,11 +3028,14 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
           state: Object.assign({}, st, { file: f.path }),
           active: false,
         });
-        return true;
+        // 校验真的切到了库内文件；没切成功就返回 false，让上层保留源文件
+        const v = leaf.view;
+        return !!(v && v.file && v.file.path === f.path);
       }
       if (typeof leaf.openFile === 'function') {
         await leaf.openFile(f);
-        return true;
+        const v = leaf.view;
+        return !!(v && v.file && v.file.path === f.path);
       }
     } catch (e) { this.dbg('打开新笔记失败', e && e.message); }
     return false;
