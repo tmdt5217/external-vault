@@ -67,10 +67,14 @@ textarea.ev-template-textarea {
    .view-header-title-parent.mod-external-file { } */
 
 /* 库外文件链接：红色、无下划线
-   除 class 外，再用 data-href / href 的 ../ 前缀兜底，class 还没附加时也能生效 */
+   除 class 外，用 data-href / href 的 ../ 前缀兜底；
+   不限定标签名，同时覆盖阅读视图的 a 和 Live Preview 的 cm-* 元素 */
+[data-href^="../"],
+[href^="../"],
+[data-href^="../"] .cm-link,
+[data-href^="../"] .cm-url,
+[data-href^="../"] .cm-hmd-internal-link,
 a.pxm-external-link,
-a.internal-link[data-href^="../"],
-a.internal-link[href^="../"],
 .pxm-external-link,
 .cm-hmd-internal-link.pxm-external-link,
 .cm-link.pxm-external-link {
@@ -79,15 +83,16 @@ a.internal-link[href^="../"],
   border-bottom: none !important;
   background-image: none !important;
 }
+[data-href^="../"]::after,
+[href^="../"]::after,
 .pxm-external-link::after,
-a.internal-link[data-href^="../"]::after,
 .cm-hmd-internal-link.pxm-external-link::after,
 .cm-link.pxm-external-link::after {
   content: none !important;
 }
+[data-href^="../"]:hover,
+[href^="../"]:hover,
 a.pxm-external-link:hover,
-a.internal-link[data-href^="../"]:hover,
-a.internal-link[href^="../"]:hover,
 .cm-hmd-internal-link.pxm-external-link:hover,
 .cm-link.pxm-external-link:hover {
   color: #e05252 !important;

@@ -1,7 +1,7 @@
 'use strict';
 
 /*
- * external-vault-pxm  v1.10.4
+ * external-vault-pxm  v1.10.5
  *
  * 用途：Obsidian 1.14+ 编辑「仓库外的 Markdown 文件」时：
  *   1) 命令「新建库外 Markdown 文件」→ 在「库外 MD 目录」里创建 .md 并尝试打开
@@ -904,7 +904,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     this.patchFirstLinkpathDest();
     this.setupExternalLinkRendering();
 
-    console.log(LOG, 'loaded v1.10.4', 'md=', this.mdRel(), 'assets=', this.assetRel(),
+    console.log(LOG, 'loaded v1.10.5', 'md=', this.mdRel(), 'assets=', this.assetRel(),
       'TExternalFile=', !!(obsidian.TExternalFile));
   }
 
