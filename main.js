@@ -4305,9 +4305,17 @@ class ExternalVaultView extends obsidian.ItemView {
         .catch(() => this.renderList());
     });
     const actions = head.createDiv({ cls: 'ev-panel-actions' });
-    const refreshBtn = actions.createEl('button', { text: tr('刷新'), cls: 'ev-panel-btn' });
+    const refreshBtn = actions.createEl('button', {
+      cls: 'clickable-icon ev-panel-btn',
+      attr: { 'aria-label': tr('刷新') },
+    });
+    if (obsidian.setIcon) obsidian.setIcon(refreshBtn, 'lucide-refresh-cw');
     refreshBtn.addEventListener('click', () => { this.refresh().catch(() => {}); });
-    const finderBtn = actions.createEl('button', { text: 'Finder', cls: 'ev-panel-btn' });
+    const finderBtn = actions.createEl('button', {
+      cls: 'clickable-icon ev-panel-btn',
+      attr: { 'aria-label': tr('打开 Finder') },
+    });
+    if (obsidian.setIcon) obsidian.setIcon(finderBtn, 'lucide-folder-open');
     finderBtn.addEventListener('click', () => this.plugin.guard(() => this.plugin.revealExternalVault()));
     this.listEl = el.createDiv({ cls: 'ev-panel-list nav-files-container' });
     this.renderList();
