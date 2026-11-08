@@ -2998,22 +2998,33 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       } catch (e) { /* noop */ }
       return null;
     };
-    // 大库索引可能滞后，最多等 10 秒；拿到对象后立刻在原标签里打开
-    for (let i = 0; i < 125; i += 1) {
-      const f = find();
-      if (f) {
-        try {
-          const leaf = targetLeaf || (typeof ws.getLeaf === 'function' ? ws.getLeaf(false) : null);
-          if (leaf && typeof leaf.openFile === 'function') {
-            await leaf.openFile(f);
-            return true;
+    let f = find();
+    if (!f && vault && typeof vault.on === 'function') {
+      // 等 Obsidian 索引到新文件（比轮询可靠），最多 10 秒
+      f = await new Promise((resolve) => {
+        const ref = vault.on('create', (file) => {
+          if (file && file.path === rel) {
+            try { vault.offref(ref); } catch (e) { /* noop */ }
+            resolve(file);
           }
-        } catch (e) { this.dbg('打开新笔记失败', e && e.message); }
-        return false;
-      }
-      await new Promise((r) => setTimeout(r, 80));
+        });
+        window.setTimeout(() => {
+          try { vault.offref(ref); } catch (e) { /* noop */ }
+          resolve(null);
+        }, 10000);
+      });
     }
-    this.dbg('新笔记未被索引，跳过自动打开：', rel);
+    if (!f) {
+      this.dbg('新笔记未被索引，跳过自动打开：', rel);
+      return false;
+    }
+    try {
+      const leaf = targetLeaf || (typeof ws.getLeaf === 'function' ? ws.getLeaf(false) : null);
+      if (leaf && typeof leaf.openFile === 'function') {
+        await leaf.openFile(f);
+        return true;
+      }
+    } catch (e) { this.dbg('打开新笔记失败', e && e.message); }
     return false;
   }
 
