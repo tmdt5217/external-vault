@@ -799,12 +799,26 @@ function pickDirectory(onPicked, defaultPath) {
 }
 
 /** 批量分配目标文件名：同时避开磁盘已有文件和本批次内重名 */
-function allocName(dir, name, used) {
+function allocName(dir, name, used, srcAbs) {
   const ext = path.extname(name);
   const stem = path.basename(name, ext);
+  const sameSize = (p) => {
+    try {
+      if (!srcAbs) return false;
+      return fs.statSync(p).size === fs.statSync(srcAbs).size;
+    } catch (e) { return false; }
+  };
   let candidate = name;
   let i = 1;
-  while (used.has(path.join(dir, candidate).toLowerCase()) || fs.existsSync(path.join(dir, candidate))) {
+  while (true) {
+    const full = path.join(dir, candidate);
+    const taken = used.has(full.toLowerCase());
+    if (!taken && !fs.existsSync(full)) break;
+    // 同名且大小相同的附件视为同一份，直接复用，避免产生 -1 副本
+    if (!taken && sameSize(full)) {
+      used.add(full.toLowerCase());
+      return full;
+    }
     candidate = stem + '-' + i + ext;
     i += 1;
   }
@@ -3065,7 +3079,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       const items = collectLocalAssets(content, src, direction === 'out' ? this.app : null);
       for (const it of items) {
         if (!assetMap.has(it.abs)) {
-          assetMap.set(it.abs, allocName(assetDestDir, path.basename(it.abs), usedAsset));
+          assetMap.set(it.abs, allocName(assetDestDir, path.basename(it.abs), usedAsset, it.abs));
         }
       }
       plans.push({ src, dest: allocName(mdDestDir, path.basename(src), usedMd), content, items });
