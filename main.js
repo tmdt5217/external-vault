@@ -2177,6 +2177,13 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       for (const abs of (this._refIndex && this._refIndex.get(name)) || []) extRefs.add(abs);
     }
     for (const abs of extRefs) targets.push({ abs, file: null });
+    // 旧版索引没有 links 字段时 _refIndex 为空，退回全量扫描，避免漏改
+    if (!extRefs.size && !this._refIndex) {
+      try {
+        const entries = await this.listExternalEntries();
+        for (const e of entries) if (e.kind === 'md') targets.push({ abs: e.abs, file: null });
+      } catch (e) { /* noop */ }
+    }
     this.dbg('引用扫描：' + targets.length + ' 个文件，目标 ' +
       records.map((r) => path.basename(r.src)).join('、'));
     const rewriteOne = async (t) => {
