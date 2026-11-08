@@ -1,7 +1,7 @@
 'use strict';
 
 /*
- * external-file-image-pxm  v1.9.0
+ * external-file-image-pxm  v1.9.1
  *
  * 用途：Obsidian 1.14+ 编辑「仓库外的 Markdown 文件」时：
  *   1) 命令「新建库外 Markdown 文件」→ 在「库外 MD 目录」里创建 .md 并尝试打开
@@ -901,9 +901,10 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     });
 
     this.patchOpenLinkText();
+    this.patchHoverLink();
     this.setupExternalLinkRendering();
 
-    console.log(LOG, 'loaded v1.9.0', 'md=', this.mdRel(), 'assets=', this.assetRel(),
+    console.log(LOG, 'loaded v1.9.1', 'md=', this.mdRel(), 'assets=', this.assetRel(),
       'TExternalFile=', !!(obsidian.TExternalFile));
   }
 
@@ -1417,15 +1418,51 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     this.registerDomEvent(document, 'mouseover', (e) => {
       const t = e.target;
       if (!t || typeof t.closest !== 'function') return;
-      const a = t.closest('a.internal-link, a.cm-hmd-internal-link, a.cm-link, a[data-href]');
-      if (!a) return;
-      const abs = this.externalTargetForLink(
-        a.getAttribute('data-href') || a.getAttribute('href'), this.activeSourcePath());
+      const el = t.closest('.internal-link, .cm-hmd-internal-link, .cm-link, .pxm-external-link, [data-href]');
+      if (!el) return;
+      const inner = el.querySelector && el.querySelector('[data-href]');
+      const href = el.getAttribute('data-href') || el.getAttribute('href') ||
+        (inner && inner.getAttribute('data-href'));
+      if (!href) return;
+      const abs = this.externalTargetForLink(href, this.activeSourcePath());
       if (!abs) return;
-      a.classList.add('pxm-external-link');
+      el.classList.add('pxm-external-link');
       e.stopPropagation();
       if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
     }, true);
+  }
+
+  /**
+   * Hover Editor / 原生预览都订阅 workspace 的 hover-link 事件。
+   * 库外文件不在库索引里，事件一旦发出就会被判定为「未创建」。
+   * 这里在事件源头吞掉指向库外的 hover-link，DOM 层的拦截只作为兜底。
+   */
+  patchHoverLink() {
+    try {
+      const ws = this.app.workspace;
+      if (!ws || typeof ws.trigger !== 'function' || ws.__pxmHoverLinkPatched) return;
+      const orig = ws.trigger.bind(ws);
+      ws.trigger = (name, ...args) => {
+        if (name === 'hover-link') {
+          const data = args[0] || {};
+          const abs = this.externalTargetForLink(data.linktext, data.sourcePath);
+          if (abs) {
+            this.dbg('已拦截库外链接的 hover-link', abs);
+            return;
+          }
+        }
+        return orig(name, ...args);
+      };
+      ws.__pxmHoverLinkPatched = true;
+      this.register(() => {
+        try {
+          if (!ws.__pxmHoverLinkPatched) return;
+          ws.trigger = orig;
+          delete ws.__pxmHoverLinkPatched;
+        } catch (e) { /* noop */ }
+      });
+      this.dbg('hover-link 已接管库外链接');
+    } catch (e) { this.dbg('patch hover-link 失败', e.message); }
   }
 
   /** 当前活动笔记的 vault 相对路径，供链接解析使用 */
