@@ -1941,6 +1941,8 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
         if (e.kind === 'md') targets.push({ abs: e.abs, file: null });
       }
     } catch (e) { /* noop */ }
+    this.dbg('引用扫描：' + targets.length + ' 个文件，目标 ' +
+      records.map((r) => path.basename(r.src)).join('、'));
     for (const t of targets) {
       if (records.some((r) => path.resolve(r.src) === path.resolve(t.abs))) continue;
       let content = '';
