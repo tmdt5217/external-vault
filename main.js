@@ -1723,9 +1723,23 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       this.scheduleIndexRefresh();
       return idx.files.slice().sort((a, b) => b.mtime - a.mtime);
     }
-    const files = await this.scanExternalFiles();
+    const started = Date.now();
+    let notice = null;
+    try { notice = new obsidian.Notice('正在建立库外文件索引…', 0); } catch (e) { /* noop */ }
+    const files = await this.scanExternalFiles(null, (done, total) => {
+      if (notice && typeof notice.setMessage === 'function') {
+        notice.setMessage('正在建立索引：' + done + ' / ' + total);
+      }
+    });
     await this.saveExternalIndex(files, mdDir);
     this.hydrateExternalCaches(files);
+    if (notice) {
+      const secs = ((Date.now() - started) / 1000).toFixed(1);
+      if (typeof notice.setMessage === 'function') {
+        notice.setMessage('索引完成：' + files.length + ' 个文件（' + secs + ' 秒）');
+      }
+      window.setTimeout(() => { try { notice.hide(); } catch (e) { /* noop */ } }, 4000);
+    }
     return files.sort((a, b) => b.mtime - a.mtime);
   }
 
@@ -1794,7 +1808,8 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     }, 5000);
   }
 
-  async scanExternalFiles(prevFiles) {
+  async scanExternalFiles(prevFiles, onProgress) {
+    let done = 0;
     const prevMap = new Map();
     for (const f of prevFiles || []) prevMap.set(path.resolve(f.abs), f);
     const mdDir = this.externalMdDir();
@@ -1804,6 +1819,10 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     let mdList = [];
     try { mdList = await listMarkdownFiles(mdDir, true, 8); } catch (e) { mdList = []; }
     for (const abs of mdList) {
+      done += 1;
+      if (onProgress && done % 200 === 0) {
+        try { onProgress(done, mdList.length); } catch (e) { /* noop */ }
+      }
       let st = null;
       try { st = fs.statSync(abs); } catch (e) { /* noop */ }
       let assets = 0;
