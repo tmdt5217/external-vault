@@ -4,6 +4,14 @@
 
 An Obsidian plugin for editing Markdown notes **outside your vault**: paste or drop images and get correct relative paths, create external notes from a template, and move notes together with their attachments in or out of the vault.
 
+## 演示
+
+![External Vault 演示](docs/demo.gif)
+
+> 10 秒看懂：在库外笔记里粘贴截图 → 自动存到 `External Vault/attachments` 并写入相对路径 → 右键标签页「移入 Vault」，笔记和附件一起搬回库内，链接自动重写。
+>
+> 录制方法见 [docs/演示录制.md](docs/演示录制.md)。把导出的 GIF 命名为 `docs/demo.gif`，GitHub 与插件商店会自动显示。
+
 ## 功能
 
 - **库外笔记插图**：在库外 Markdown 里粘贴截图、拖入图片或其他附件，自动存到库外附件目录，并插入两个目录之间的相对路径。库内笔记的行为完全不变。
