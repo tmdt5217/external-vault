@@ -3365,6 +3365,19 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
   }
 
   /** 源 MD 被移走前，关掉指向它的标签页 */
+  /** 把打开某库外文件的标签重定向到库内文件，保持当前笔记不切换 */
+  retargetLeaves(srcAbs, targetFile) {
+    this.app.workspace.getLeavesOfType('markdown').forEach((leaf) => {
+      try {
+        const v = leaf.view;
+        const abs = v && v.file ? externalAbsFromFile(v.file, this.app) : null;
+        if (abs && path.resolve(abs) === path.resolve(srcAbs)) {
+          leaf.openFile(targetFile);
+        }
+      } catch (e) { /* noop */ }
+    });
+  }
+
   detachLeaves(predicate) {
     const leaves = [];
     try {
@@ -3590,7 +3603,18 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     }
     const toDelete = plan.doomed.filter((a) => !keepByFailed.has(path.resolve(a)));
 
+    const vRootForMove = vaultRoot(this.app) || '';
     for (const src of deleted) {
+      if (direction === 'in') {
+        // 移入后把原来打开库外笔记的标签直接指向库内新位置，保持当前笔记不切换
+        const rec = plans.find((x) => path.resolve(x.src) === path.resolve(src));
+        const rel = rec && vRootForMove
+          ? path.relative(vRootForMove, rec.dest).split(path.sep).join('/')
+          : '';
+        let tf = null;
+        try { tf = rel ? this.app.vault.getFileByPath(rel) : null; } catch (e) { /* noop */ }
+        if (tf) { this.retargetLeaves(src, tf); continue; }
+      }
       this.detachLeaves((view) => externalAbsFromFile(view.file, this.app) === src);
     }
     toDelete.forEach((p, i) => {
