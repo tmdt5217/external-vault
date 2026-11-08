@@ -66,24 +66,31 @@ textarea.ev-template-textarea {
 /* 如以后要给库外标签页加视觉标记：
    .view-header-title-parent.mod-external-file { } */
 
-/* 库外文件链接：与库内链接区分 */
+/* 库外文件链接：红色、无下划线
+   除 class 外，再用 data-href / href 的 ../ 前缀兜底，class 还没附加时也能生效 */
+a.pxm-external-link,
+a.internal-link[data-href^="../"],
+a.internal-link[href^="../"],
 .pxm-external-link,
 .cm-hmd-internal-link.pxm-external-link,
 .cm-link.pxm-external-link {
-  color: var(--color-red, #e05252) !important;
+  color: #e05252 !important;
   text-decoration: none !important;
-  border-bottom: none;
-  background-image: none;
+  border-bottom: none !important;
+  background-image: none !important;
 }
 .pxm-external-link::after,
+a.internal-link[data-href^="../"]::after,
 .cm-hmd-internal-link.pxm-external-link::after,
 .cm-link.pxm-external-link::after {
-  content: none;
+  content: none !important;
 }
-.pxm-external-link:hover,
+a.pxm-external-link:hover,
+a.internal-link[data-href^="../"]:hover,
+a.internal-link[href^="../"]:hover,
 .cm-hmd-internal-link.pxm-external-link:hover,
 .cm-link.pxm-external-link:hover {
-  color: var(--color-red, #e05252) !important;
+  color: #e05252 !important;
   text-decoration: none !important;
 }
 
