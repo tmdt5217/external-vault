@@ -1919,12 +1919,27 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       byName.set(path.basename(r.src, path.extname(r.src)), r);
     }
     let changed = 0;
-    const files = this.app.vault.getMarkdownFiles();
-    for (const file of files) {
+    const targets = [];
+    for (const f of this.app.vault.getMarkdownFiles()) {
+      targets.push({ abs: path.resolve(vRoot, f.path), file: f });
+    }
+    // 库外笔记里也可能引用它，一并改写
+    try {
+      const entries = await this.listExternalEntries();
+      for (const e of entries) {
+        if (e.kind === 'md') targets.push({ abs: e.abs, file: null });
+      }
+    } catch (e) { /* noop */ }
+    for (const t of targets) {
+      if (records.some((r) => path.resolve(r.src) === path.resolve(t.abs))) continue;
       let content = '';
-      try { content = await this.app.vault.read(file); } catch (e) { continue; }
+      try {
+        content = t.file
+          ? await this.app.vault.read(t.file)
+          : await fs.promises.readFile(t.abs, 'utf8');
+      } catch (e) { continue; }
       let next = content;
-      const referrerAbs = path.resolve(vRoot, file.path);
+      const referrerAbs = t.abs;
       for (const [name, r] of byName) {
         if (this.isInsideExternalVault(r.dest)) {
           const re = new RegExp('\\[\\[' + escapeRegExp(name) +
@@ -1949,7 +1964,8 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       }
       if (next !== content) {
         try {
-          await this.app.vault.process(file, () => next);
+          if (t.file) await this.app.vault.process(t.file, () => next);
+          else await fs.promises.writeFile(t.abs, next, 'utf8');
           changed += 1;
         } catch (e) { /* noop */ }
       }
