@@ -1,0 +1,11 @@
+# Obsidian local settings
+data.json
+
+# Local backups / build leftovers
+*.backup-*
+*.bak
+*.pre-*
+backups/
+
+# macOS
+.DS_Store
