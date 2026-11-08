@@ -70,6 +70,7 @@ textarea.ev-template-textarea {
 .pxm-external-link,
 .cm-hmd-internal-link.pxm-external-link,
 .cm-link.pxm-external-link {
+  color: var(--color-red, #e05252) !important;
   text-decoration: underline;
   text-decoration-color: currentColor;
   text-decoration-thickness: 1px;
@@ -91,6 +92,7 @@ textarea.ev-template-textarea {
 .pxm-external-link:hover,
 .cm-hmd-internal-link.pxm-external-link:hover,
 .cm-link.pxm-external-link:hover {
+  color: var(--color-red, #e05252) !important;
   text-decoration-thickness: 2px;
 }
 
