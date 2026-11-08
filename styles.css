@@ -174,7 +174,9 @@ span.cm-hmd-internal-link.ev-external-link .cm-underline,
 .ev-external-link,
 .cm-hmd-internal-link.ev-external-link,
 .cm-link.ev-external-link,
-.markdown-rendered a.ev-external-link {
+.markdown-rendered a.ev-external-link,
+.markdown-rendered a.external-link.ev-external-link,
+.markdown-rendered a.internal-link.ev-external-link {
   color: rgb(188, 43, 22) !important;
   text-decoration: none;
 }

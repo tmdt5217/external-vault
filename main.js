@@ -2334,7 +2334,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       for (const el of links) el.classList.add('ev-external-link');
     }
     // 阅读视图 / 预览里的 Markdown 链接（a.internal-link）
-    const anchors = view.contentEl.querySelectorAll('a.internal-link');
+    const anchors = view.contentEl.querySelectorAll('a.internal-link, a.external-link');
     for (const a of anchors) {
       const href = a.getAttribute('href') || a.getAttribute('data-href') || '';
       if (!href) continue;
