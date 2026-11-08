@@ -176,6 +176,7 @@ const EN = {
   '打开 Finder': 'Open in Finder',
   '搜索文件名、路径或别名…': 'Search name, path or alias…',
   '别名：': 'Aliases: ',
+  '确认删除库外 MD（含附件）': 'Delete external note (with attachments)?',
   // 命令
   '库外文件：新建 Markdown': 'External files: New Markdown',
   '库外文件：打开 External Vault 菜单': 'External files: Open External Vault menu',
