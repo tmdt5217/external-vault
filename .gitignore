@@ -9,3 +9,4 @@ backups/
 
 # macOS
 .DS_Store
+.undo/
