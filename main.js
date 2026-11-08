@@ -2989,10 +2989,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
           const f = vault.getAbstractFileByPath(rel);
           if (f && f.path && !f.children) return f;
         }
-        if (mc && typeof mc.getFirstLinkpathDest === 'function') {
-          const f = mc.getFirstLinkpathDest(rel, '');
-          if (f && f.path) return f;
-        }
+        // 不再用 getFirstLinkpathDest：它按文件名模糊匹配，可能命中同名其他笔记
       } catch (e) { /* noop */ }
       return null;
     };
