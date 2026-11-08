@@ -3083,16 +3083,24 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
         console.warn(LOG, skipped);
       } else {
         // 源 MD 即将被移走：先关掉指向它的标签页，避免留下裂图/已删除标签页
+        let cutAllowed = true;
         if (typeof options.beforeRemove === 'function') {
           try { openedInPlace = !!(await options.beforeRemove(plans)); }
           catch (e) { this.dbg('转移前切换标签页失败', e.message); }
+          // 移入时如果没能在原标签里切到库内文件，就不要删源文件，
+          // 否则标签会变成「未打开文件（外）」
+          if (!openedInPlace && direction === 'in') cutAllowed = false;
         }
         // 被其他笔记共用的附件只复制、保留原件，避免弄断别人的链接
         const keep = options.keepAssetSources instanceof Set ? options.keepAssetSources : new Set();
         const srcFiles = Array.from(new Set(plans.map((p) => p.src)
           .concat(Array.from(assetMap.keys()).filter((a) => !keep.has(a)))))
           .filter((s) => !destFiles.has(s)); // 源与目标同路径时绝不删
-        cut = await cutSourceFiles(srcFiles, !!this.settings.cutUseTrash);
+        if (cutAllowed) {
+          cut = await cutSourceFiles(srcFiles, !!this.settings.cutUseTrash);
+        } else {
+          skipped = '库内新文件尚未被 Obsidian 索引，已保留库外源文件（未剪切）；确认标签正常后可手动删除';
+        }
       }
     }
 
