@@ -166,6 +166,17 @@ span.cm-hmd-internal-link.ev-external-link .cm-underline,
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.ev-panel-bullet {
+  width: 16px;
+  flex: none;
+  text-align: center;
+  font-weight: 700;
+  color: var(--text-normal);
+}
+.ev-panel-name.is-active {
+  font-weight: 600;
+  color: var(--text-normal);
+}
 .ev-panel-empty { padding: 12px 8px; color: var(--text-muted); font-size: var(--font-ui-small); }
 
 /* 库外文件管理器（ExternalFilesModal） */

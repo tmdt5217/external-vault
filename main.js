@@ -4227,6 +4227,9 @@ class ExternalVaultView extends obsidian.ItemView {
   async onOpen() {
     this.render();
     await this.refresh();
+    this.registerEvent(this.app.workspace.on('file-open', () => {
+      this.refresh().catch(() => {});
+    }));
     this.registerInterval(window.setInterval(() => {
       this.refresh().catch(() => {});
     }, 30000));
@@ -4272,6 +4275,11 @@ class ExternalVaultView extends obsidian.ItemView {
       });
       return;
     }
+    this.activeAbs = '';
+    try {
+      const ctx = this.plugin.activeExternalContext();
+      if (ctx && ctx.file) this.activeAbs = path.resolve(ctx.file);
+    } catch (e) { /* noop */ }
     this.renderNode(this.buildTree(rows), 0, this.listEl);
   }
 
@@ -4314,21 +4322,14 @@ class ExternalVaultView extends obsidian.ItemView {
     for (const f of files) {
       const row = container.createDiv({ cls: 'ev-panel-row' });
       row.style.paddingLeft = (8 + depth * 14) + 'px';
-      const icon = row.createSpan({ cls: 'ev-panel-icon' });
-      if (obsidian.setIcon) {
-        obsidian.setIcon(icon, f.kind === 'image' ? 'lucide-image'
-          : (f.kind === 'pdf' || f.kind === 'md' ? 'lucide-file-text' : 'lucide-file'));
-      }
-      row.createSpan({
-        cls: 'ev-panel-name',
+      const active = this.activeAbs && path.resolve(f.abs) === this.activeAbs;
+      row.createSpan({ cls: 'ev-panel-bullet', text: active ? '•' : '' });
+      const name = row.createSpan({
+        cls: 'ev-panel-name' + (active ? ' is-active' : ''),
         text: path.basename(f.abs, path.extname(f.abs)),
       });
+      name.title = f.rel;
       row.addEventListener('click', () => {
-        this.listEl.querySelectorAll('.ev-panel-row.is-active')
-          .forEach((x) => x.classList.remove('is-active'));
-        row.classList.add('is-active');
-      });
-      row.addEventListener('dblclick', () => {
         this.plugin.guard(() => (f.kind === 'md'
           ? this.plugin.openExternalMd(f.abs)
           : this.plugin.openExternalAny(f.abs)));
