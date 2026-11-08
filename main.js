@@ -4780,12 +4780,30 @@ class ExternalVaultView extends obsidian.ItemView {
     this.renderList();
 
     // 库内文件列表 → 拖到面板：移出到外部库
+    // 记下从左侧文件列表开始拖拽的路径（.nav-file-title 上有 data-path）
+    this._draggingVaultPath = '';
+    this.registerDomEvent(document, 'dragstart', (e) => {
+      try {
+        const el = e.target && e.target.closest
+          ? e.target.closest('.nav-file-title, .nav-file') : null;
+        this._draggingVaultPath = el ? (el.getAttribute('data-path') || '') : '';
+      } catch (err) { this._draggingVaultPath = ''; }
+    }, true);
     this.registerDomEvent(this.listEl, 'dragover', (e) => {
       if (e.dataTransfer) e.preventDefault();
     });
     this.registerDomEvent(this.listEl, 'drop', (e) => {
       try {
         this.plugin.dbg('面板 drop 类型：' + Array.from((e.dataTransfer && e.dataTransfer.types) || []).join(','));
+        const navPath = this._draggingVaultPath;
+        const navFile = navPath ? this.app.vault.getAbstractFileByPath(navPath) : null;
+        if (navFile && isMdFileObject(navFile)) {
+          e.preventDefault();
+          e.stopPropagation();
+          this._draggingVaultPath = '';
+          this.plugin.guard(() => this.plugin.contextMoveOut(navFile));
+          return;
+        }
         const dropped = e.dataTransfer.files && e.dataTransfer.files[0];
         const droppedPath = dropped && dropped.path;
         if (droppedPath) {
