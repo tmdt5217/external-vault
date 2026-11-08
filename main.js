@@ -70,7 +70,6 @@ const obsidian = require('obsidian');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { execFile } = require('child_process');
 
 const LOG = '[external-file-image-pxm]';
 
@@ -105,7 +104,7 @@ const DEFAULT_SETTINGS = {
   keepOriginalName: true,               // 拖入文件时保留原名；粘贴截图仍用时间戳命名
   writeTitle: true,                     // 「不用模板」时写入「# 标题」（模板模式不追加）
   // ---- 新建 MD 模板（v1.4.6） ----
-  noteTemplateMode: 'file',             // file 模板文件 | text 自定义内容 | none 不用模板
+  noteTemplateMode: 'text',             // text 内置/自定义内容 | file 模板文件 | none 不用模板
   noteTemplatePath: DEFAULT_NOTE_TEMPLATE_PATH, // 相对 vault 根，也接受绝对路径；留空用内置 YAML
   noteTemplateText: DEFAULT_NOTE_TEMPLATE_TEXT, // 自定义内容，支持 {{title}} / {{date}} 等变量
   showNotice: true,
@@ -1055,7 +1054,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     let opened = false;
     try { await this.openExternalMd(dest); opened = true; }
     catch (e) { this.dbg('新建后直接打开失败，降级系统打开', e.message); }
-    if (!opened) this.systemOpen(dest);
+    if (!opened) await this.systemOpen(dest);
 
     new obsidian.Notice(
       '已创建 ' + title + '.md\n位置：' + dir + '\n路径已复制；若未自动打开，请用「打开仓库外的文件…」选择它',
@@ -1064,12 +1063,16 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     return dest;
   }
 
-  systemOpen(filePath) {
+  async systemOpen(filePath) {
     try {
-      const cb = (err) => { if (err) this.dbg('系统打开失败', err.message); };
-      if (process.platform === 'darwin') execFile('open', ['-a', 'Obsidian', filePath], cb);
-      else if (process.platform === 'win32') execFile('cmd', ['/c', 'start', '', filePath], cb);
-      else execFile('xdg-open', [filePath], cb);
+      const electron = require('electron');
+      const shell = electron && (electron.shell || (electron.remote && electron.remote.shell));
+      if (shell && typeof shell.openPath === 'function') {
+        const err = await shell.openPath(filePath);
+        if (err) this.dbg('系统打开失败', err);
+        return;
+      }
+      this.dbg('当前环境没有 shell.openPath，无法用系统方式打开', filePath);
     } catch (err) { this.dbg('系统打开异常', err); }
   }
 
@@ -1196,7 +1199,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     return this.openExternalMd(notes[0].abs);
   }
 
-  /** 在系统文件管理器里打开目录：electron shell → 系统 open 命令 */
+  /** 在系统文件管理器里打开目录（仅用 electron shell） */
   async revealExternalFolder(dir) {
     if (!dir) throw new Error('拿不到库外目录，请检查插件设置');
     await fs.promises.mkdir(dir, { recursive: true });
@@ -1219,13 +1222,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
         return 'showItemInFolder';
       } catch (e) { this.dbg('showItemInFolder 失败', e.message); }
     }
-    const cmd = process.platform === 'darwin' ? 'open'
-      : process.platform === 'win32' ? 'explorer' : 'xdg-open';
-    await new Promise((resolve, reject) => {
-      execFile(cmd, [dir], (err) => (err ? reject(err) : resolve()));
-    });
-    this.dbg('reveal via', cmd, dir);
-    return 'exec:' + cmd;
+    throw new Error('无法在文件管理器中打开目录：' + dir);
   }
 
   async revealExternalVault() {
