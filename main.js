@@ -1951,6 +1951,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
           ? await this.app.vault.read(t.file)
           : await fs.promises.readFile(t.abs, 'utf8');
       } catch (e) { continue; }
+      if (content.includes(name)) this.dbg('包含目标名的文件：' + t.abs);
       let next = content;
       const referrerAbs = t.abs;
       for (const [name, r] of byName) {
