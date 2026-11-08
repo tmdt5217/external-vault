@@ -1,7 +1,7 @@
 'use strict';
 
 /*
- * external-file-image-pxm  v1.4.8
+ * external-file-image-pxm  v1.4.9
  *
  * 用途：Obsidian 1.14+ 编辑「仓库外的 Markdown 文件」时：
  *   1) 命令「新建库外 Markdown 文件」→ 在「库外 MD 目录」里创建 .md 并尝试打开
@@ -836,6 +836,18 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
         if (!ctx || !ctx.file) throw new Error('当前不是「打开仓库外的文件…」打开的库外 MD');
         const abs = ctx.file;
         return this.contextMoveIn({
+          path: 'file:' + abs, extension: 'md', getRealPath: () => abs,
+        });
+      }),
+    });
+    this.addCommand({
+      id: 'delete-external-note',
+      name: '右键动作：删除当前库外 MD（含附件）',
+      callback: () => this.guard(() => {
+        const ctx = this.activeExternalContext();
+        if (!ctx || !ctx.file) throw new Error('当前不是「打开仓库外的文件…」打开的库外 MD');
+        const abs = ctx.file;
+        return this.promptDeleteExternalNote({
           path: 'file:' + abs, extension: 'md', getRealPath: () => abs,
         });
       }),
@@ -1783,6 +1795,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
   registerContextMenus() {
     const outMenus = new WeakSet();
     const inMenus = new WeakSet();
+    const delMenus = new WeakSet();
     const externalSources = ['tab-header', 'more-options', 'sidebar-context-menu'];
     const canAdd = (menu, seen) => {
       if (!this.settings.contextMenuEnabled) return false;
@@ -1836,6 +1849,16 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
           .onClick(() => this.guard(() => this.contextMoveIn(file))));
       } catch (e) { this.dbg('添加「移入 Vault」菜单项失败', e.message); }
     };
+    const addDelete = (menu, file) => {
+      if (!canAdd(menu, delMenus)) return;
+      try {
+        menu.addItem((item) => item
+          .setSection('action')
+          .setTitle('删除库外 MD（含附件）')
+          .setIcon('lucide-trash-2')
+          .onClick(() => this.guard(() => this.promptDeleteExternalNote(file))));
+      } catch (e) { this.dbg('添加「删除库外 MD」菜单项失败', e.message); }
+    };
 
     this.registerEvent(this.app.workspace.on('file-menu', (menu, file, source) => {
       try {
@@ -1844,7 +1867,10 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
         // 第一张图：文件列表右键 → 移出 Vault
         if (!external && source === 'file-explorer-context-menu') addMoveOut(menu, file);
         // 第二张图：库外文件的标签页 / 更多选项右键 → 移入 Vault
-        if (external && externalSources.indexOf(source) !== -1) addMoveIn(menu, file);
+        if (external && externalSources.indexOf(source) !== -1) {
+          addMoveIn(menu, file);
+          addDelete(menu, file);
+        }
       } catch (e) { this.dbg('file-menu 处理失败', e.message); }
     }));
 
@@ -1858,7 +1884,10 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     this.registerEvent(this.app.workspace.on('leaf-menu', (menu, leaf) => {
       try {
         const file = leaf && leaf.view && leaf.view.file;
-        if (file && isMdFileObject(file) && isExternalTFile(file)) addMoveIn(menu, file);
+        if (file && isMdFileObject(file) && isExternalTFile(file)) {
+          addMoveIn(menu, file);
+          addDelete(menu, file);
+        }
       } catch (e) { this.dbg('leaf-menu 处理失败', e.message); }
     }));
   }
@@ -2064,6 +2093,72 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     });
   }
 
+  /** 这些附件是否还被库外目录里的其他 MD 引用（递归扫描，不读库内索引） */
+  async assetsUsedElsewhere(assets, excludeMdAbs) {
+    const used = new Set();
+    const list = Array.from(new Set(assets || [])).filter((a) => fs.existsSync(a));
+    if (!list.length) return used;
+    const exclude = path.resolve(excludeMdAbs);
+    const wanted = new Set(list.map((a) => path.resolve(a)));
+    let mds = [];
+    try { mds = await listMarkdownFiles(this.externalMdDir(), true, 8); }
+    catch (e) { this.dbg('扫描库外 MD 失败，按「全部共享」处理', e.message); return new Set(list); }
+    for (const md of mds) {
+      if (path.resolve(md) === exclude) continue;
+      let text = '';
+      try { text = await fs.promises.readFile(md, 'utf8'); } catch (e) { continue; }
+      for (const it of collectLocalAssets(text, md, null)) {
+        const abs = path.resolve(it.abs);
+        if (wanted.has(abs)) used.add(it.abs);
+      }
+    }
+    return used;
+  }
+
+  /** 确认弹窗：先算清会删哪些附件，再由用户点确认 */
+  async promptDeleteExternalNote(file) {
+    const src = externalAbsFromFile(file, this.app);
+    if (!src) throw new Error('无法解析这个库外文件的绝对路径');
+    if (!fs.existsSync(src)) throw new Error('库外文件不存在：' + src);
+    const assets = this.assetPathsIn(src)
+      .filter((a) => !isInsideVault(a, this.app) && fs.existsSync(a));
+    const shared = await this.assetsUsedElsewhere(assets, src);
+    new DeleteExternalNoteModal(this.app, this, src, assets, shared).open();
+  }
+
+  /** 删除库外 MD：先删 MD，成功后再删未被其他笔记引用的库外附件 */
+  async deleteExternalNote(file) {
+    const src = externalAbsFromFile(file, this.app);
+    if (!src) throw new Error('无法解析这个库外文件的绝对路径');
+    if (!fs.existsSync(src)) throw new Error('库外文件不存在：' + src);
+
+    // 未保存的编辑器内容先落盘，避免删掉后又被写回
+    this.flushOpenEditor(src, (v) => externalAbsFromFile(v.file, this.app) === src);
+
+    const assets = this.assetPathsIn(src)
+      .filter((a) => !isInsideVault(a, this.app) && fs.existsSync(a));
+    const shared = await this.assetsUsedElsewhere(assets, src);
+    const doomed = assets.filter((a) => !shared.has(a));
+
+    const mdRes = await cutSourceFiles([src], this.settings.cutUseTrash);
+    if (!mdRes.removed) {
+      throw new Error('删除库外 MD 失败：' +
+        ((mdRes.failed[0] && mdRes.failed[0].message) || '未知错误'));
+    }
+    this.detachLeaves((view) => externalAbsFromFile(view.file, this.app) === src);
+
+    const assetRes = doomed.length
+      ? await cutSourceFiles(doomed, this.settings.cutUseTrash)
+      : { removed: 0, trashed: 0, failed: [] };
+
+    const lines = ['已删除 ' + path.basename(src)];
+    lines.push('附件：删除 ' + assetRes.removed + ' 个' +
+      (shared.size ? '，保留 ' + shared.size + ' 个（仍被其他笔记引用）' : ''));
+    if (assetRes.failed.length) lines.push(assetRes.failed.length + ' 个附件删除失败，已留在原处');
+    new obsidian.Notice(lines.join('\n'), 8000);
+    return { md: src, removed: assetRes.removed, kept: shared.size, failed: assetRes.failed };
+  }
+
   /** 探测不到路径时用它导出真实数据结构，便于按版本适配 */
   async diagnose() {
     const views = this.candidateViews();
@@ -2168,6 +2263,62 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
 }
 
 // ---------------------------------------------------------------------------
+
+class DeleteExternalNoteModal extends obsidian.Modal {
+  constructor(app, plugin, src, assets, shared) {
+    super(app);
+    this.plugin = plugin;
+    this.src = src;
+    this.assets = assets;
+    this.shared = shared;
+  }
+
+  onOpen() {
+    const el = this.contentEl;
+    el.empty();
+    el.addClass('external-file-image-modal');
+
+    el.createEl('h2', { text: '删除库外 Markdown（含附件）' });
+
+    const doomed = this.assets.filter((a) => !this.shared.has(a));
+    const lines = [
+      '笔记：' + this.src,
+      '将删除附件：' + doomed.length + ' 个',
+    ];
+    if (doomed.length) {
+      lines.push(doomed.slice(0, 6).map((a) => '  · ' + path.basename(a)).join('\n') +
+        (doomed.length > 6 ? '\n  · …' : ''));
+    }
+    if (this.shared.size) {
+      lines.push('保留附件：' + this.shared.size + ' 个（仍被其他笔记引用）');
+    }
+    el.createDiv({ cls: 'efi-preview' }).textContent = lines.join('\n');
+
+    el.createEl('p', {
+      cls: 'setting-item-description',
+      text: (this.plugin.settings.cutUseTrash
+        ? '文件会移到系统废纸篓，可从废纸篓找回。'
+        : '文件会直接从磁盘删除，不生成备份，不可撤销。') +
+        '只删除库外目录里的附件，库内附件一律保留。',
+    });
+
+    const buttons = el.createDiv({ cls: 'efi-buttons' });
+    const ok = buttons.createEl('button', { text: '确认删除', cls: 'mod-warning' });
+    const cancel = buttons.createEl('button', { text: '取消' });
+    cancel.addEventListener('click', () => this.close());
+    ok.addEventListener('click', () => {
+      this.close();
+      Promise.resolve(this.plugin.deleteExternalNote({
+        path: 'file:' + this.src, extension: 'md', getRealPath: () => this.src,
+      })).catch((err) => this.plugin.reportError(err));
+    });
+    el.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') this.close();
+    });
+  }
+
+  onClose() { this.contentEl.empty(); }
+}
 
 class TransferConfirmModal extends obsidian.Modal {
   constructor(app, plugin, direction, files, sourceDir) {
