@@ -1965,8 +1965,25 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       }
       if (next !== content) {
         try {
-          if (t.file) await this.app.vault.process(t.file, () => next);
-          else await fs.promises.writeFile(t.abs, next, 'utf8');
+          if (t.file) {
+            await this.app.vault.process(t.file, () => next);
+          } else {
+            // 库外笔记若正打开着，直接改编辑器内容并保存，避免旧 buffer 覆盖磁盘
+            let applied = false;
+            for (const leaf of this.app.workspace.getLeavesOfType('markdown')) {
+              const v = leaf.view;
+              if (!v || !v.file) continue;
+              const abs = externalAbsFromFile(v.file, this.app);
+              if (!abs || path.resolve(abs) !== path.resolve(t.abs)) continue;
+              if (!v.editor) continue;
+              try {
+                v.editor.setValue(next);
+                if (typeof v.save === 'function') v.save().catch(() => {});
+                applied = true;
+              } catch (e) { /* noop */ }
+            }
+            if (!applied) await fs.promises.writeFile(t.abs, next, 'utf8');
+          }
           changed += 1;
         } catch (e) { /* noop */ }
       }
