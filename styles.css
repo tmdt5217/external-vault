@@ -71,6 +71,24 @@ textarea.efi-template-textarea {
   width: min(620px, calc(100vw - 32px));
   max-width: calc(100vw - 32px);
 }
+.efi-files-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.efi-files-head h2 {
+  flex: none;
+  margin: 0;
+}
+.efi-files-search {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.efi-files-search input {
+  width: 100%;
+  box-sizing: border-box;
+}
 .efi-files-toolbar {
   display: flex;
   align-items: center;

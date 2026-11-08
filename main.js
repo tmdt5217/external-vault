@@ -1,7 +1,7 @@
 'use strict';
 
 /*
- * external-file-image-pxm  v1.6.1
+ * external-file-image-pxm  v1.7.0
  *
  * 用途：Obsidian 1.14+ 编辑「仓库外的 Markdown 文件」时：
  *   1) 命令「新建库外 Markdown 文件」→ 在「库外 MD 目录」里创建 .md 并尝试打开
@@ -877,7 +877,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
 
     this.patchOpenLinkText();
 
-    console.log(LOG, 'loaded v1.6.1', 'md=', this.mdRel(), 'assets=', this.assetRel(),
+    console.log(LOG, 'loaded v1.7.0', 'md=', this.mdRel(), 'assets=', this.assetRel(),
       'TExternalFile=', !!(obsidian.TExternalFile));
   }
 
@@ -1266,16 +1266,19 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     const view = this.app.workspace.getActiveViewOfType(obsidian.MarkdownView);
     this.openExternalFilesModal({
       mode: 'pick',
-      onPick: (abs) => {
-        const href = this.externalLinkFor(abs, file.path);
-        const label = path.basename(abs, path.extname(abs));
-        const md = '[' + label + '](' + href + ')';
+      onPick: (absList) => {
+        const list = Array.isArray(absList) ? absList : [absList];
+        const md = list.map((abs) => {
+          const href = this.externalLinkFor(abs, file.path);
+          const label = path.basename(abs, path.extname(abs));
+          return '[' + label + '](' + href + ')';
+        }).join('\n');
         if (view && view.editor && typeof view.editor.replaceSelection === 'function') {
           view.editor.replaceSelection(md);
-          new obsidian.Notice('已插入链接：' + md, 6000);
+          new obsidian.Notice('已插入 ' + list.length + ' 个链接', 5000);
         } else {
           navigator.clipboard.writeText(md)
-            .then(() => new obsidian.Notice('已复制链接：' + md, 6000))
+            .then(() => new obsidian.Notice('已复制 ' + list.length + ' 个链接', 5000))
             .catch(() => new obsidian.Notice('链接：' + md, 9000));
         }
       },
@@ -2026,6 +2029,20 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
         }
       } catch (e) { this.dbg('leaf-menu 处理失败', e.message); }
     }));
+
+    // 编辑器右键：库内笔记直接插入库外文件链接（可多选）
+    this.registerEvent(this.app.workspace.on('editor-menu', (menu, editor, view) => {
+      try {
+        const file = view && view.file;
+        if (!file || isExternalTFile(file) || !isMdPath(file.path)) return;
+        if (!menu || typeof menu.addItem !== 'function') return;
+        menu.addItem((item) => item
+          .setSection('action')
+          .setTitle('插入库外文件链接')
+          .setIcon('lucide-link')
+          .onClick(() => this.guard(() => this.insertExternalLink())));
+      } catch (e) { this.dbg('editor-menu 处理失败', e.message); }
+    }));
   }
 
   /** 读一篇 MD 里实际能找到的本地附件绝对路径 */
@@ -2502,8 +2519,13 @@ class ExternalFilesModal extends obsidian.Modal {
     this.onPick = this.opts.onPick || null;
     this.files = [];
     this.selected = new Set();
+    this.query = '';
     this.stage = 'list';
     this.confirmData = null;
+    this.listEl = null;
+    this.allBox = null;
+    this.countEl = null;
+    this.okBtn = null;
   }
 
   async onOpen() {
@@ -2544,67 +2566,113 @@ class ExternalFilesModal extends obsidian.Modal {
     }
 
     const picking = this.mode === 'pick';
-    el.createEl('h2', { text: picking ? '插入库外文件链接' : '库外文件' });
+    const head = el.createDiv({ cls: 'efi-files-head' });
+    head.createEl('h2', { text: picking ? '插入库外文件链接' : '库外文件' });
+    const searchWrap = head.createDiv({ cls: 'efi-files-search' });
+    const search = searchWrap.createEl('input', {
+      type: 'search', placeholder: '搜索文件名或路径…',
+    });
+    search.value = this.query || '';
+    search.addEventListener('input', () => {
+      this.query = search.value;
+      this.renderList();
+    });
+
     el.createEl('p', {
       cls: 'setting-item-description',
       text: picking
-        ? '点击一行，在当前库内笔记光标处插入相对链接（../External Vault/…）。换电脑后只要目录结构一致，链接照常可用。'
+        ? '勾选一个或多个文件，点「插入」在光标处生成相对链接（../External Vault/…）；换电脑只要目录结构一致即可继续用。'
         : '目录：' + this.plugin.externalMdDir() + '　共 ' + this.files.length + ' 篇',
     });
 
-    if (!picking) {
-      const toolbar = el.createDiv({ cls: 'efi-files-toolbar' });
-      const all = toolbar.createEl('label', { cls: 'efi-files-all' });
-      const allBox = all.createEl('input', { type: 'checkbox' });
-      allBox.checked = this.files.length > 0 && this.selected.size === this.files.length;
-      allBox.addEventListener('change', () => {
-        if (allBox.checked) this.files.forEach((f) => this.selected.add(f.abs));
-        else this.selected.clear();
-        this.render();
-      });
-      all.createSpan({ text: '全选' });
-      toolbar.createSpan({ cls: 'efi-files-count', text: '已选 ' + this.selected.size + ' 篇' });
-    }
+    const toolbar = el.createDiv({ cls: 'efi-files-toolbar' });
+    const all = toolbar.createEl('label', { cls: 'efi-files-all' });
+    this.allBox = all.createEl('input', { type: 'checkbox' });
+    this.allBox.addEventListener('change', () => {
+      const rows = this.filtered();
+      if (this.allBox.checked) rows.forEach((f) => this.selected.add(f.abs));
+      else rows.forEach((f) => this.selected.delete(f.abs));
+      this.renderList();
+    });
+    all.createSpan({ text: '全选' });
+    this.countEl = toolbar.createSpan({ cls: 'efi-files-count', text: '已选 ' + this.selected.size + ' 篇' });
 
-    const listEl = el.createDiv({ cls: 'efi-files-list' });
-    if (!this.files.length) {
-      listEl.createDiv({ cls: 'efi-files-empty', text: 'External Vault 里还没有 Markdown 文件' });
+    this.listEl = el.createDiv({ cls: 'efi-files-list' });
+    this.renderList();
+
+    const buttons = el.createDiv({ cls: 'efi-buttons' });
+    this.okBtn = buttons.createEl('button', {
+      text: picking ? '插入' : '删除选中（含附件）',
+      cls: picking ? 'mod-cta' : 'mod-warning',
+    });
+    this.okBtn.addEventListener('click', () => {
+      if (picking) this.commitPick();
+      else this.prepareDelete();
+    });
+    const close = buttons.createEl('button', { text: picking ? '取消' : '关闭' });
+    close.addEventListener('click', () => this.close());
+    this.updateFooter();
+    el.addEventListener('keydown', (e) => { if (e.key === 'Escape') this.close(); });
+  }
+
+  /** 当前搜索词过滤后的文件（按名称或相对路径，忽略大小写） */
+  filtered() {
+    const q = String(this.query || '').trim().toLowerCase();
+    if (!q) return this.files;
+    return this.files.filter((f) =>
+      f.rel.toLowerCase().includes(q) || path.basename(f.abs).toLowerCase().includes(q));
+  }
+
+  /** 只重建列表，让搜索框保持焦点与输入法状态 */
+  renderList() {
+    if (!this.listEl) return;
+    this.listEl.empty();
+    const rows = this.filtered();
+    if (!rows.length) {
+      this.listEl.createDiv({
+        cls: 'efi-files-empty',
+        text: this.files.length ? '没有匹配的文件' : 'External Vault 里还没有 Markdown 文件',
+      });
+      this.updateFooter();
+      return;
     }
-    for (const f of this.files) {
-      const row = listEl.createEl('label', { cls: 'efi-files-row' });
-      if (!picking) {
-        const box = row.createEl('input', { type: 'checkbox' });
-        box.checked = this.selected.has(f.abs);
-        box.addEventListener('change', () => {
-          if (box.checked) this.selected.add(f.abs);
-          else this.selected.delete(f.abs);
-          this.render();
-        });
-      }
+    for (const f of rows) {
+      const row = this.listEl.createEl('label', { cls: 'efi-files-row' });
+      const box = row.createEl('input', { type: 'checkbox' });
+      box.checked = this.selected.has(f.abs);
+      box.addEventListener('change', () => {
+        if (box.checked) this.selected.add(f.abs);
+        else this.selected.delete(f.abs);
+        this.updateFooter();
+      });
       const main = row.createDiv({ cls: 'efi-files-main' });
       main.createDiv({ cls: 'efi-files-name', text: path.basename(f.abs) });
       main.createDiv({ cls: 'efi-files-path', text: f.rel });
       const meta = row.createDiv({ cls: 'efi-files-meta' });
       meta.textContent = (f.assets ? f.assets + ' 个附件' : '无附件') +
         (f.mtime ? ' · ' + new Date(f.mtime).toLocaleString() : '');
-      if (picking) {
-        row.addEventListener('click', (e) => {
-          e.preventDefault();
-          if (this.onPick) this.onPick(f.abs);
-          this.close();
-        });
-      }
     }
+    this.updateFooter();
+  }
 
-    const buttons = el.createDiv({ cls: 'efi-buttons' });
-    if (!picking) {
-      const del = buttons.createEl('button', { text: '删除选中（含附件）', cls: 'mod-warning' });
-      del.disabled = this.selected.size === 0;
-      del.addEventListener('click', () => { this.prepareDelete(); });
+  updateFooter() {
+    const n = this.selected.size;
+    if (this.countEl) this.countEl.textContent = '已选 ' + n + ' 篇';
+    const rows = this.filtered();
+    if (this.allBox) {
+      this.allBox.checked = rows.length > 0 && rows.every((f) => this.selected.has(f.abs));
     }
-    const close = buttons.createEl('button', { text: picking ? '取消' : '关闭' });
-    close.addEventListener('click', () => this.close());
-    el.addEventListener('keydown', (e) => { if (e.key === 'Escape') this.close(); });
+    if (this.okBtn) {
+      this.okBtn.disabled = n === 0;
+      this.okBtn.textContent = this.mode === 'pick' ? '插入' : '删除选中（含附件）';
+    }
+  }
+
+  commitPick() {
+    const list = Array.from(this.selected);
+    if (!list.length) return;
+    if (this.onPick) this.onPick(list);
+    this.close();
   }
 
   async prepareDelete() {
