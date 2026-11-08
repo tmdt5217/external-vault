@@ -2067,7 +2067,15 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       if (name === path.basename(abs)) return;
       const dest = path.join(path.dirname(abs), name);
       if (fs.existsSync(dest)) throw new Error('同名文件已存在：' + name);
+      // 库内同名不算冲突（两个独立目录），但提示一下，避免以为是同一篇
+      let inVaultSameName = false;
+      try {
+        inVaultSameName = !!this.app.vault.getAbstractFileByPath(name);
+      } catch (e) { /* noop */ }
       await fs.promises.rename(abs, dest);
+      if (inVaultSameName) {
+        new obsidian.Notice('库内已有同名笔记「' + name + '」，这是两个独立文件', 6000);
+      }
       this._externalNameCache = null;
       try { await this.rewriteLinksForRename(abs, dest); } catch (e) { this.dbg('重命名后改写链接失败', e.message); }
       this.refreshExternalPanels();
