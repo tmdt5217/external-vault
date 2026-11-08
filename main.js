@@ -3372,7 +3372,8 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     }
     const plan = await this.deletePlanFor(list);
 
-    const mdRes = await cutSourceFiles(list, this.settings.cutUseTrash);
+    // 删除库外笔记一律走系统废纸篓，保证可恢复
+    const mdRes = await cutSourceFiles(list, true);
     const failedMd = new Set(mdRes.failed.map((f) => path.resolve(f.path)));
     const deleted = list.filter((p) => !failedMd.has(p));
 
@@ -3387,7 +3388,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       this.detachLeaves((view) => externalAbsFromFile(view.file, this.app) === src);
     }
     const assetRes = toDelete.length
-      ? await cutSourceFiles(toDelete, this.settings.cutUseTrash)
+      ? await cutSourceFiles(toDelete, true)
       : { removed: 0, trashed: 0, failed: [] };
 
     const lines = ['已删除 ' + deleted.length + ' 篇库外 MD' +
@@ -3551,10 +3552,7 @@ class DeleteExternalNoteModal extends obsidian.Modal {
 
     el.createEl('p', {
       cls: 'setting-item-description',
-      text: (this.plugin.settings.cutUseTrash
-        ? '文件会移到系统废纸篓，可从废纸篓找回。'
-        : '文件会直接从磁盘删除，不生成备份，不可撤销。') +
-        '只删除库外目录里的附件，库内附件一律保留。',
+      text: '文件会移到系统废纸篓，可从废纸篓找回。只删除库外目录里的附件，库内附件一律保留。',
     });
 
     const buttons = el.createDiv({ cls: 'ev-buttons' });
@@ -3799,10 +3797,7 @@ class ExternalFilesModal extends obsidian.Modal {
     el.createDiv({ cls: 'ev-preview' }).textContent = lines.join('\n');
     el.createEl('p', {
       cls: 'setting-item-description',
-      text: (this.plugin.settings.cutUseTrash
-        ? '文件会移到系统废纸篓，可从废纸篓找回。'
-        : '文件会直接从磁盘删除，不生成备份，不可撤销。') +
-        '只删除库外目录里的附件；库内附件一律保留。',
+      text: '文件会移到系统废纸篓，可从废纸篓找回。只删除库外目录里的附件；库内附件一律保留。',
     });
 
     const buttons = el.createDiv({ cls: 'ev-buttons' });
