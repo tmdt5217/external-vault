@@ -100,6 +100,14 @@ An Obsidian plugin for editing Markdown notes **outside your vault**: paste or d
 
 `main.js` 是构建产物，本仓库直接以它作为源码维护；修改后用 `node --check main.js` 做语法校验，再重载 Obsidian 验证。
 
+发布新版本：
+
+```bash
+./release.sh 1.10.8
+```
+
+脚本会自动改 `manifest.json`、`versions.json` 和代码里的版本号，跑语法校验，然后 commit、打 tag、push；装了 `gh` 会直接创建 Release，没装会打印网页链接，手动上传 `main.js`、`manifest.json`、`styles.css` 即可。
+
 ## English
 
 **External Vault** lets you edit Markdown notes that live outside your vault:
