@@ -4384,9 +4384,12 @@ class ExternalVaultView extends obsidian.ItemView {
   getIcon() { return 'lucide-folder-open'; }
 
   async onOpen() {
-    this.buildHeaderActions();
     this.render();
     await this.refresh();
+    // 等视图标题栏渲染完成后再插入，否则 querySelector 可能拿不到 .view-header
+    window.setTimeout(() => {
+      try { this.buildHeaderActions(); } catch (e) { /* noop */ }
+    }, 80);
     this.registerEvent(this.app.workspace.on('file-open', () => {
       this.refresh().catch(() => {});
     }));
@@ -4422,9 +4425,12 @@ class ExternalVaultView extends obsidian.ItemView {
     addIcon('lucide-refresh-cw', tr('刷新'), () => { this.refresh().catch(() => {}); });
     addIcon('lucide-folder-open', tr('打开 Finder'), () => this.plugin.guard(() => this.plugin.revealExternalVault()));
     addIcon('lucide-more-horizontal', tr('更多'), (e) => this.showPanelMenu(e));
-    const left = header.querySelector('.view-header-left');
-    if (left) left.appendChild(bar);
-    else header.appendChild(bar);
+    const left = header && header.querySelector('.view-header-left');
+    if (left) { left.appendChild(bar); return; }
+    if (header) { header.appendChild(bar); return; }
+    // 标题栏结构不可用时，回退到内容区顶部的折叠工具条
+    bar.className = 'ev-panel-toolbar-fallback';
+    this.contentEl.prepend(bar);
   }
 
   async refresh() {
