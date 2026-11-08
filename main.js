@@ -1320,7 +1320,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
           if (fn) item.onClick(() => this.guard(fn));
         });
       };
-      add('打开External Vault', 'lucide-folder-open', () => this.revealExternalVault());
+      add('打开External Vault', 'lucide-folder-open', () => this.openExternalFilesModal({ mode: 'open' }));
       add('打开附件目录', 'lucide-image', () => this.revealExternalAssets());
       add('新建库外MD', 'lucide-file-plus', () => this.openNewNoteModal());
       add('复制External Vault路径', 'lucide-copy', async () => {
@@ -2938,7 +2938,7 @@ class ExternalFilesModal extends obsidian.Modal {
     super(app);
     this.plugin = plugin;
     this.opts = opts || {};
-    this.mode = this.opts.mode === 'pick' ? 'pick' : 'manage';
+    this.mode = this.opts.mode === 'pick' ? 'pick' : this.opts.mode === 'open' ? 'open' : 'manage';
     this.onPick = this.opts.onPick || null;
     this.files = [];
     this.selected = new Set();
@@ -2989,8 +2989,11 @@ class ExternalFilesModal extends obsidian.Modal {
     }
 
     const picking = this.mode === 'pick';
+    const opening = this.mode === 'open';
     const head = el.createDiv({ cls: 'ev-files-head' });
-    head.createEl('h2', { text: picking ? '插入库外文件链接' : '库外文件' });
+    head.createEl('h2', {
+      text: opening ? '打开库外文件' : (picking ? '插入库外文件链接' : '库外文件'),
+    });
     const searchWrap = head.createDiv({ cls: 'ev-files-search' });
     const search = searchWrap.createEl('input', {
       type: 'search', placeholder: '搜索文件名或路径…',
@@ -3003,11 +3006,14 @@ class ExternalFilesModal extends obsidian.Modal {
 
     el.createEl('p', {
       cls: 'setting-item-description',
-      text: picking
-        ? '勾选一个或多个文件，点「插入」在光标处生成相对链接（../External Vault/…）；换电脑只要目录结构一致即可继续用。'
-        : '目录：' + this.plugin.externalMdDir() + '　共 ' + this.files.length + ' 篇',
+      text: opening
+        ? '双击一行直接打开；也可以搜索文件名或路径。'
+        : (picking
+          ? '勾选一个或多个文件，点「插入」在光标处生成相对链接（../External Vault/…）；换电脑只要目录结构一致即可继续用。'
+          : '目录：' + this.plugin.externalMdDir() + '　共 ' + this.files.length + ' 篇'),
     });
 
+    if (!opening) {
     const toolbar = el.createDiv({ cls: 'ev-files-toolbar' });
     const all = toolbar.createEl('label', { cls: 'ev-files-all' });
     this.allBox = all.createEl('input', { type: 'checkbox' });
@@ -3019,20 +3025,25 @@ class ExternalFilesModal extends obsidian.Modal {
     });
     all.createSpan({ text: '全选' });
     this.countEl = toolbar.createSpan({ cls: 'ev-files-count', text: '已选 ' + this.selected.size + ' 篇' });
+    }
 
     this.listEl = el.createDiv({ cls: 'ev-files-list' });
     this.renderList();
 
     const buttons = el.createDiv({ cls: 'ev-buttons' });
-    this.okBtn = buttons.createEl('button', {
-      text: picking ? '插入' : '删除选中（含附件）',
-      cls: picking ? 'mod-cta' : 'mod-warning',
+    if (!opening) {
+      this.okBtn = buttons.createEl('button', {
+        text: picking ? '插入' : '删除选中（含附件）',
+        cls: picking ? 'mod-cta' : 'mod-warning',
+      });
+      this.okBtn.addEventListener('click', () => {
+        if (picking) this.commitPick();
+        else this.prepareDelete();
+      });
+    }
+    const close = buttons.createEl('button', {
+      text: opening ? '关闭' : (picking ? '取消' : '关闭'),
     });
-    this.okBtn.addEventListener('click', () => {
-      if (picking) this.commitPick();
-      else this.prepareDelete();
-    });
-    const close = buttons.createEl('button', { text: picking ? '取消' : '关闭' });
     close.addEventListener('click', () => this.close());
     this.updateFooter();
     el.addEventListener('keydown', (e) => { if (e.key === 'Escape') this.close(); });
@@ -3059,21 +3070,38 @@ class ExternalFilesModal extends obsidian.Modal {
       this.updateFooter();
       return;
     }
+    const opening = this.mode === 'open';
     for (const f of rows) {
-      const row = this.listEl.createEl('label', { cls: 'ev-files-row' });
-      const box = row.createEl('input', { type: 'checkbox' });
-      box.checked = this.selected.has(f.abs);
-      box.addEventListener('change', () => {
-        if (box.checked) this.selected.add(f.abs);
-        else this.selected.delete(f.abs);
-        this.updateFooter();
+      const row = this.listEl.createEl('label', {
+        cls: 'ev-files-row' + (opening ? ' is-openable' : ''),
       });
+      if (!opening) {
+        const box = row.createEl('input', { type: 'checkbox' });
+        box.checked = this.selected.has(f.abs);
+        box.addEventListener('change', () => {
+          if (box.checked) this.selected.add(f.abs);
+          else this.selected.delete(f.abs);
+          this.updateFooter();
+        });
+      }
       const main = row.createDiv({ cls: 'ev-files-main' });
       main.createDiv({ cls: 'ev-files-name', text: path.basename(f.abs) });
       main.createDiv({ cls: 'ev-files-path', text: f.rel });
       const meta = row.createDiv({ cls: 'ev-files-meta' });
       meta.textContent = (f.assets ? f.assets + ' 个附件' : '无附件') +
         (f.mtime ? ' · ' + new Date(f.mtime).toLocaleString() : '');
+      if (opening) {
+        row.addEventListener('click', () => {
+          this.listEl.querySelectorAll('.ev-files-row.is-active')
+            .forEach((x) => x.classList.remove('is-active'));
+          row.classList.add('is-active');
+        });
+        row.addEventListener('dblclick', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          this.openPicked(f.abs);
+        });
+      }
     }
     this.updateFooter();
   }
@@ -3096,6 +3124,12 @@ class ExternalFilesModal extends obsidian.Modal {
     if (!list.length) return;
     if (this.onPick) this.onPick(list);
     this.close();
+  }
+
+  /** open 模式：双击一行直接打开库外文件 */
+  openPicked(abs) {
+    this.close();
+    this.plugin.guard(() => this.plugin.openExternalMd(abs));
   }
 
   async prepareDelete() {
