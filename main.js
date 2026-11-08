@@ -182,6 +182,8 @@ const EN = {
   '创建于': 'Created ',
   '新建笔记': 'New note',
   '打开库外文件': 'Open external file',
+  '移入 OB Vault（含附件）': 'Move to vault (with attachments)',
+  '移入 External Vault（含附件）': 'Move to External Vault (with attachments)',
   '文件名 (A-Z)': 'File name (A-Z)',
   '文件名 (Z-A)': 'File name (Z-A)',
   '编辑时间 (从新到旧)': 'Modified (newest first)',
@@ -3073,8 +3075,19 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
         if (!external && source === 'file-explorer-context-menu') addMoveOut(menu, file);
         // 第二张图：库外文件的标签页 / 更多选项右键 → 移入 Vault
         if (external && externalSources.indexOf(source) !== -1) {
-          addMoveIn(menu, file);
-          addDelete(menu, file);
+          const abs = externalAbsFromFile(file, this.app);
+          if (abs && this.isInsideExternalVault(abs)) {
+            addMoveIn(menu, file);
+            addDelete(menu, file);
+          } else if (abs) {
+            // 任意位置的 MD（既不在库内，也不在 External Vault）：
+            // 两个方向都提供，附件一起搬
+            menu.addItem((i) => i.setTitle('移入 OB Vault（含附件）').setIcon('lucide-log-in')
+              .onClick(() => this.guard(() => this.contextMoveIn(file))));
+            menu.addItem((i) => i.setTitle('移入 External Vault（含附件）').setIcon('lucide-folder-input')
+              .onClick(() => this.guard(() => this.moveAnyToExternal(abs))));
+            addDelete(menu, file);
+          }
         }
       } catch (e) { this.dbg('file-menu 处理失败', e.message); }
     }));
@@ -3264,6 +3277,36 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
   }
 
   /** 文件列表右键（单选 / 多选）：MD → 库外 MD 目录；附件 → 库外附件目录 */
+  /** 判断绝对路径是否位于当前外部库的 MD / 附件目录内 */
+  isInsideExternalVault(abs) {
+    if (!abs) return false;
+    const p = path.resolve(abs);
+    const dirs = [this.externalMdDir(), this.externalAssetDir()].filter(Boolean);
+    return dirs.some((d) => {
+      const base = path.resolve(d);
+      return p === base || p.startsWith(base + path.sep);
+    });
+  }
+
+  /** 任意位置的库外 MD → 选中的 External Vault（含附件） */
+  async moveAnyToExternal(abs) {
+    const targetVault = await this.pickTargetVault();
+    if (!targetVault) return null;
+    const vRoot = vaultRoot(this.app);
+    if (!vRoot) throw new Error('拿不到 vault 根目录');
+    const mdDestDir = resolveVaultRelative(this.app, targetVault.mdDir);
+    const assetDestDir = resolveVaultRelative(this.app, targetVault.assetDir);
+    if (!mdDestDir || !assetDestDir) throw new Error('拿不到目标外部库目录');
+    return this.executeTransfer([abs], 'out', {
+      paths: {
+        vRoot, mdDestDir, assetDestDir,
+        relAssetDir: relativeFromMd(mdDestDir, assetDestDir),
+      },
+      moveSource: this.settings.contextMenuMoveSource,
+      note: '目标外部库：' + targetVault.name,
+    });
+  }
+
   async contextMoveOut(fileOrFiles) {
     const targets = vaultMdTargets(fileOrFiles, this.app);
     if (!targets.length) throw new Error('没有可移出的库内 Markdown 文件');
