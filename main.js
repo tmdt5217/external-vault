@@ -3327,9 +3327,11 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
         if (typeof options.beforeRemove === 'function') {
           try { openedInPlace = !!(await options.beforeRemove(plans)); }
           catch (e) { this.dbg('转移前切换标签页失败', e.message); }
-          // 移入时如果没能在原标签里切到库内文件，就不要删源文件，
-          // 否则标签会变成「未打开文件（外）」
-          if (!openedInPlace && direction === 'in') cutAllowed = false;
+          // 索引未就绪也照常剪切；标签等 Obsidian 索引到新文件后后台重定向
+          if (!openedInPlace && direction === 'in' && plans[0]) {
+            const relIn = path.relative(vRoot, plans[0].dest).split(path.sep).join('/');
+            this.watchForImportedNote(relIn, plans[0].src);
+          }
         }
         // 被其他笔记共用的附件只复制、保留原件，避免弄断别人的链接
         const keep = options.keepAssetSources instanceof Set ? options.keepAssetSources : new Set();
@@ -3649,6 +3651,20 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
 
   /** 源 MD 被移走前，关掉指向它的标签页 */
   /** 把打开某库外文件的标签重定向到库内文件，保持当前笔记不切换 */
+  /** 索引迟迟没就绪时，后台等 create 事件再把旧标签指向库内文件 */
+  watchForImportedNote(rel, srcAbs) {
+    try {
+      const ref = this.app.vault.on('create', async (f) => {
+        if (!f || f.path !== rel) return;
+        try { this.app.vault.offref(ref); } catch (e) { /* noop */ }
+        await this.retargetLeaves(srcAbs, f);
+      });
+      window.setTimeout(() => {
+        try { this.app.vault.offref(ref); } catch (e) { /* noop */ }
+      }, 60000);
+    } catch (e) { /* noop */ }
+  }
+
   async retargetLeaves(srcAbs, targetFile) {
     const ws = this.app.workspace;
     const prev = ws.activeLeaf;
