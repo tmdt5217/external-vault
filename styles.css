@@ -98,6 +98,18 @@ a.pxm-external-link:hover,
   color: #e05252 !important;
   text-decoration: none !important;
 }
+/* Live Preview：覆盖 Obsidian 用 CSS 变量控制的链接颜色与下划线 */
+span.cm-hmd-internal-link.pxm-external-link,
+span.cm-hmd-internal-link.pxm-external-link .cm-underline,
+.pxm-external-link,
+.pxm-external-link .cm-underline {
+  --link-color: #e05252;
+  --link-color-hover: #e05252;
+  --link-decoration: none;
+  --link-decoration-hover: none;
+  color: #e05252 !important;
+  text-decoration: none !important;
+}
 
 /* 库外文件管理器（ExternalFilesModal） */
 .modal.ev-files-modal {

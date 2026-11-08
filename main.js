@@ -1,7 +1,7 @@
 'use strict';
 
 /*
- * external-vault-pxm  v1.10.5
+ * external-vault-pxm  v1.10.6
  *
  * 用途：Obsidian 1.14+ 编辑「仓库外的 Markdown 文件」时：
  *   1) 命令「新建库外 Markdown 文件」→ 在「库外 MD 目录」里创建 .md 并尝试打开
@@ -904,7 +904,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     this.patchFirstLinkpathDest();
     this.setupExternalLinkRendering();
 
-    console.log(LOG, 'loaded v1.10.5', 'md=', this.mdRel(), 'assets=', this.assetRel(),
+    console.log(LOG, 'loaded v1.10.6', 'md=', this.mdRel(), 'assets=', this.assetRel(),
       'TExternalFile=', !!(obsidian.TExternalFile));
   }
 
@@ -1425,6 +1425,12 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       if (!abs) return;
       el.classList.add('pxm-external-link');
     }, true);
+
+    // 5) Live Preview 兜底：定期扫描当前编辑器，给命中库外的链接补 class
+    this.registerInterval(window.setInterval(() => {
+      try { this.refreshEditorLinkClasses(); } catch (e) { /* noop */ }
+    }, 1200));
+    this.refreshEditorLinkClasses();
   }
 
   /**
@@ -1469,6 +1475,33 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       });
       this.dbg('getFirstLinkpathDest 已接管库外链接');
     } catch (e) { this.dbg('patch getFirstLinkpathDest 失败', e.message); }
+  }
+
+  /**
+   * Live Preview 的链接是 CodeMirror 生成的 span.cm-hmd-internal-link，
+   * 没有稳定的 data-href 可供 CSS 选择，只能定期扫描当前编辑器补 class。
+   * 链接目标从同一行残留的 data-href 或 .cm-url 文本里取。
+   */
+  refreshEditorLinkClasses() {
+    const view = this.app.workspace.getActiveViewOfType(obsidian.MarkdownView);
+    if (!view || !view.contentEl) return;
+    const sourcePath = this.activeSourcePath();
+    if (!sourcePath) return;
+    const lines = view.contentEl.querySelectorAll('.cm-line');
+    for (const line of lines) {
+      const links = line.querySelectorAll('.cm-hmd-internal-link, .cm-link');
+      if (!links.length) continue;
+      let raw = '';
+      const hrefEl = line.querySelector('[data-href]');
+      if (hrefEl) raw = hrefEl.getAttribute('data-href') || '';
+      if (!raw) {
+        const urlEl = line.querySelector('.cm-url');
+        if (urlEl) raw = urlEl.textContent || '';
+      }
+      if (!raw) continue;
+      if (!this.externalTargetForLink(raw, sourcePath)) continue;
+      for (const el of links) el.classList.add('pxm-external-link');
+    }
   }
 
   /** 当前活动笔记的 vault 相对路径，供链接解析使用 */
