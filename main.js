@@ -903,6 +903,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     this.patchOpenLinkText();
     this.patchFirstLinkpathDest();
     this.setupExternalLinkRendering();
+    this.setupExternalTabBadge();
 
     console.log(LOG, 'loaded v1.10.7', 'md=', this.mdRel(), 'assets=', this.assetRel(),
       'TExternalFile=', !!(obsidian.TExternalFile));
@@ -1502,6 +1503,38 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       if (!this.externalTargetForLink(raw, sourcePath)) continue;
       for (const el of links) el.classList.add('ev-external-link');
     }
+  }
+
+  /** 库外笔记的标签页标题后加「（外）」 */
+  setupExternalTabBadge() {
+    this.registerInterval(window.setInterval(() => {
+      try { this.markExternalTabTitles(); } catch (e) { /* noop */ }
+    }, 800));
+    this.registerEvent(this.app.workspace.on('file-open', () => {
+      try { this.markExternalTabTitles(); } catch (e) { /* noop */ }
+    }));
+    this.registerEvent(this.app.workspace.on('layout-change', () => {
+      try { this.markExternalTabTitles(); } catch (e) { /* noop */ }
+    }));
+    this.markExternalTabTitles();
+  }
+
+  markExternalTabTitles() {
+    const ws = this.app.workspace;
+    if (!ws || typeof ws.iterateAllLeaves !== 'function') return;
+    ws.iterateAllLeaves((leaf) => {
+      try {
+        const view = leaf && leaf.view;
+        if (!view || !view.file) return;
+        const headerEl = leaf.tabHeaderEl;
+        const titleEl = headerEl && headerEl.querySelector
+          ? headerEl.querySelector('.workspace-tab-header-inner-title')
+          : null;
+        if (!titleEl) return;
+        if (isExternalTFile(view.file)) titleEl.classList.add('ev-external-tab');
+        else titleEl.classList.remove('ev-external-tab');
+      } catch (e) { /* noop */ }
+    });
   }
 
   /** 当前活动笔记的 vault 相对路径，供链接解析使用 */

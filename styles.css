@@ -111,6 +111,15 @@ span.cm-hmd-internal-link.ev-external-link .cm-underline,
   text-decoration: none !important;
 }
 
+/* 库外笔记的标签页标题：追加「（外）」 */
+.ev-external-tab::after {
+  content: '（外）';
+  margin-left: 2px;
+  color: var(--text-muted);
+  font-size: 0.85em;
+  font-weight: 400;
+}
+
 /* 库外文件管理器（ExternalFilesModal） */
 .modal.ev-files-modal {
   width: min(620px, calc(100vw - 32px));
