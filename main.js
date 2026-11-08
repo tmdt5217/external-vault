@@ -1939,6 +1939,33 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     return this._externalNameCache.get(key) || null;
   }
 
+  /** 同步扫描外部库，按文件名或 frontmatter 别名匹配（缓存未就绪时兜底） */
+  resolveExternalByAliasSync(name) {
+    const key = String(name || '').replace(/\.md$/i, '').trim();
+    const mdDir = this.externalMdDir();
+    if (!key || !mdDir || !fs.existsSync(mdDir)) return null;
+    const walk = (dir, depth) => {
+      let entries = [];
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return null; }
+      for (const en of entries) {
+        if (en.name.startsWith('.')) continue;
+        const p = path.join(dir, en.name);
+        if (en.isDirectory()) {
+          if (depth < 3) { const r = walk(p, depth + 1); if (r) return r; }
+          continue;
+        }
+        if (!en.isFile() || !isMdPath(en.name)) continue;
+        if (path.basename(en.name, path.extname(en.name)) === key) return p;
+        try {
+          const head = fs.readFileSync(p, 'utf8').slice(0, 3000);
+          if (parseFrontmatterAliases(head).includes(key)) return p;
+        } catch (e) { /* noop */ }
+      }
+      return null;
+    };
+    return walk(mdDir, 0);
+  }
+
   externalTargetForLink(linktext, sourcePath) {
     try {
       let raw = String(linktext || '').trim();
@@ -1976,6 +2003,10 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
         }
         const cached = this.findExternalByName(raw);
         if (cached) candidates.push(cached);
+        else {
+          const syncHit = this.resolveExternalByAliasSync(raw);
+          if (syncHit) candidates.push(syncHit);
+        }
       }
       for (const abs of candidates) {
         if (!abs) continue;
