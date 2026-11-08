@@ -238,6 +238,7 @@ const EN = {
   '撤销上一次移动': 'Undo last move',
   '没有可撤销的移动记录': 'No move to undo',
   '已撤销上一次移动': 'Last move undone',
+  '已撤销上一次删除': 'Last deletion undone',
   '删除目标文件': 'Target files removed',
   '恢复源文件': 'Source files restored',
   '失败': 'Failed',
@@ -1897,7 +1898,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     this.settings.lastMove = null;
     await this.saveData(this.settings);
     const lines = [
-      tr('已撤销上一次移动'),
+      rec.kind === 'delete' ? tr('已撤销上一次删除') : tr('已撤销上一次移动'),
       tr('删除目标文件') + '：' + res.removed + ' ' + tr('个'),
       tr('恢复源文件') + '：' + res.restored + ' ' + tr('个'),
     ];
@@ -3390,6 +3391,20 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     const assetRes = toDelete.length
       ? await cutSourceFiles(toDelete, true)
       : { removed: 0, trashed: 0, failed: [] };
+
+    // 记录本次删除，供「撤销上一次移动」从废纸篓恢复
+    const removedNotes = deleted.filter((p) => !fs.existsSync(p));
+    const removedAssets = toDelete.filter((p) => !fs.existsSync(p));
+    if (removedNotes.length || removedAssets.length) {
+      this.settings.lastMove = {
+        ts: Date.now(),
+        kind: 'delete',
+        trashed: true,
+        notes: removedNotes.map((p) => ({ src: p, dest: null })),
+        assets: removedAssets.map((p) => ({ src: p, dest: null })),
+      };
+      try { await this.saveData(this.settings); } catch (e) { /* noop */ }
+    }
 
     const lines = ['已删除 ' + deleted.length + ' 篇库外 MD' +
       (failedMd.size ? '（' + failedMd.size + ' 篇删除失败）' : '')];
