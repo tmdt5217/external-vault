@@ -1861,6 +1861,27 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     }).open();
   }
 
+  /** 删除/剪切前的本地备份目录（不依赖系统废纸篓权限） */
+  backupDirFor(tag) {
+    try {
+      const root = vaultRoot(this.app);
+      if (!root) return null;
+      const dir = path.join(root, '.obsidian', 'plugins', 'external-vault', '.undo',
+        String(tag || 'op') + '-' + Date.now());
+      fs.mkdirSync(dir, { recursive: true });
+      return dir;
+    } catch (e) { return null; }
+  }
+
+  backupFile(src, backupDir, index) {
+    if (!backupDir) return null;
+    try {
+      const dest = path.join(backupDir, String(index) + '-' + path.basename(src));
+      fs.copyFileSync(src, dest);
+      return dest;
+    } catch (e) { return null; }
+  }
+
   /** 撤销上一次移入/移出：删除目标文件，再从系统废纸篓把源文件移回原路径 */
   async undoLastMove() {
     const rec = this.settings.lastMove;
@@ -1882,6 +1903,18 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     for (const item of items) {
       if (!item.src) continue;
       if (fs.existsSync(item.src)) { res.restored += 1; continue; }
+      // 优先从删除前的本地备份恢复（不依赖废纸篓权限）
+      if (item.backup && fs.existsSync(item.backup)) {
+        try {
+          await fs.promises.mkdir(path.dirname(item.src), { recursive: true });
+          await fs.promises.copyFile(item.backup, item.src);
+          res.restored += 1;
+          continue;
+        } catch (e) {
+          res.failed.push({ path: item.src, message: e.message });
+          continue;
+        }
+      }
       const found = findTrashItem(item.src);
       if (!found) {
         res.failed.push({ path: item.src, message: tr('废纸篓中未找到') });
@@ -3374,6 +3407,14 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     const plan = await this.deletePlanFor(list);
 
     // 删除库外笔记一律走系统废纸篓，保证可恢复
+    // 删除前先在本机留一份备份，撤销时优先用它（不依赖废纸篓读取权限）
+    const backupDir = this.backupDirFor('delete');
+    const backupMap = new Map();
+    list.forEach((p, i) => {
+      const b = this.backupFile(p, backupDir, i);
+      if (b) backupMap.set(p, b);
+    });
+
     const mdRes = await cutSourceFiles(list, true);
     const failedMd = new Set(mdRes.failed.map((f) => path.resolve(f.path)));
     const deleted = list.filter((p) => !failedMd.has(p));
@@ -3388,11 +3429,16 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     for (const src of deleted) {
       this.detachLeaves((view) => externalAbsFromFile(view.file, this.app) === src);
     }
+    toDelete.forEach((p, i) => {
+      const b = this.backupFile(p, backupDir, list.length + i);
+      if (b) backupMap.set(p, b);
+    });
+
     const assetRes = toDelete.length
       ? await cutSourceFiles(toDelete, true)
       : { removed: 0, trashed: 0, failed: [] };
 
-    // 记录本次删除，供「撤销上一次移动」从废纸篓恢复
+    // 记录本次删除，供「撤销上一次移动」从备份 / 废纸篓恢复
     const removedNotes = deleted.filter((p) => !fs.existsSync(p));
     const removedAssets = toDelete.filter((p) => !fs.existsSync(p));
     if (removedNotes.length || removedAssets.length) {
@@ -3400,8 +3446,8 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
         ts: Date.now(),
         kind: 'delete',
         trashed: true,
-        notes: removedNotes.map((p) => ({ src: p, dest: null })),
-        assets: removedAssets.map((p) => ({ src: p, dest: null })),
+        notes: removedNotes.map((p) => ({ src: p, dest: null, backup: backupMap.get(p) || null })),
+        assets: removedAssets.map((p) => ({ src: p, dest: null, backup: backupMap.get(p) || null })),
       };
       try { await this.saveData(this.settings); } catch (e) { /* noop */ }
     }
