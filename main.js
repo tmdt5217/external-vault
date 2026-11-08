@@ -1636,7 +1636,10 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
         add('（这个文件夹里还没有 .md 文件）', null, null, true);
       } else {
         add('最近编辑的库外笔记', null, null, true);
-        for (const n of notes) add(n.name, 'lucide-file-text', () => this.openExternalMd(n.abs));
+        for (const n of notes) {
+          const label = n.name.length > 32 ? n.name.slice(0, 32) + '…' : n.name;
+          add(label, 'lucide-file-text', () => this.openExternalMd(n.abs));
+        }
       }
       if (evt && typeof evt.clientX === 'number') {
         menu.showAtMouseEvent(evt);
