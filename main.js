@@ -3018,7 +3018,19 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     }
     try {
       const leaf = targetLeaf || (typeof ws.getLeaf === 'function' ? ws.getLeaf(false) : null);
-      if (leaf && typeof leaf.openFile === 'function') {
+      if (!leaf) return false;
+      // 用 setViewState 重建视图，清掉旧库外文件的历史，避免删源后标签变成「未打开文件」
+      if (typeof leaf.setViewState === 'function') {
+        const st = (leaf.view && typeof leaf.view.getState === 'function'
+          ? leaf.view.getState() : {}) || {};
+        await leaf.setViewState({
+          type: 'markdown',
+          state: Object.assign({}, st, { file: f.path }),
+          active: false,
+        });
+        return true;
+      }
+      if (typeof leaf.openFile === 'function') {
         await leaf.openFile(f);
         return true;
       }
