@@ -4785,6 +4785,21 @@ class ExternalVaultView extends obsidian.ItemView {
     });
     this.registerDomEvent(this.listEl, 'drop', (e) => {
       try {
+        this.plugin.dbg('面板 drop 类型：' + Array.from((e.dataTransfer && e.dataTransfer.types) || []).join(','));
+        const dropped = e.dataTransfer.files && e.dataTransfer.files[0];
+        const droppedPath = dropped && dropped.path;
+        if (droppedPath) {
+          const vRoot = vaultRoot(this.app);
+          const relDropped = vRoot
+            ? path.relative(vRoot, droppedPath).split(path.sep).join('/') : '';
+          const f2 = relDropped ? this.app.vault.getAbstractFileByPath(relDropped) : null;
+          if (f2 && isMdFileObject(f2)) {
+            e.preventDefault();
+            e.stopPropagation();
+            this.plugin.guard(() => this.plugin.contextMoveOut(f2));
+            return;
+          }
+        }
         const text = String(e.dataTransfer.getData('text/plain') || '').trim();
         if (!text) return;
         const rel = text.split('\n')[0].trim();
@@ -4799,7 +4814,12 @@ class ExternalVaultView extends obsidian.ItemView {
     // 面板 → 拖到左侧文件列表：移入库内
     this.registerDomEvent(document, 'drop', (e) => {
       const abs = e.dataTransfer && e.dataTransfer.getData('application/x-external-vault');
-      if (!abs) return;
+      if (!abs) {
+        try {
+          this.plugin.dbg('文档 drop 类型：' + Array.from((e.dataTransfer && e.dataTransfer.types) || []).join(','));
+        } catch (err) { /* noop */ }
+        return;
+      }
       const nav = e.target && e.target.closest ? e.target.closest('.nav-files-container') : null;
       if (!nav) return;
       e.preventDefault();
