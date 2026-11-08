@@ -1,7 +1,7 @@
-/* external-file-image-pxm —— 新建库外 MD 的弹窗 */
+/* external-vault-pxm —— 新建库外 MD 的弹窗 */
 
-.efi-preview,
-.efi-settings-preview {
+.ev-preview,
+.ev-settings-preview {
   white-space: pre-wrap;
   word-break: break-all;
   padding: 10px 12px;
@@ -13,18 +13,18 @@
   line-height: 1.6;
 }
 
-.external-file-image-modal .efi-label {
+.external-vault-modal .ev-label {
   margin: 10px 0 4px;
   font-size: var(--font-ui-smaller);
   color: var(--text-muted);
 }
 
-.external-file-image-modal .efi-input {
+.external-vault-modal .ev-input {
   width: 100%;
   box-sizing: border-box;
 }
 
-.external-file-image-modal .efi-buttons {
+.external-vault-modal .ev-buttons {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
@@ -32,20 +32,20 @@
 }
 
 /* 设置面板：分组标题黑体加粗，只作用于本插件页 */
-.efi-settings .setting-item-heading .setting-item-name,
-.efi-settings .setting-item.setting-item-heading .setting-item-name {
+.ev-settings .setting-item-heading .setting-item-name,
+.ev-settings .setting-item.setting-item-heading .setting-item-name {
   font-weight: 700;
   color: var(--text-normal);
   font-size: 15px;
 }
-.efi-settings .setting-item-heading {
+.ev-settings .setting-item-heading {
   margin-top: 14px;
   border-bottom: 1px solid var(--background-modifier-border);
   padding-bottom: 6px;
 }
 
 /* 设置面板：自定义新建 MD 模板内容 */
-textarea.efi-template-textarea {
+textarea.ev-template-textarea {
   width: 100%;
   min-height: 150px;
   box-sizing: border-box;
@@ -90,52 +90,52 @@ textarea.efi-template-textarea {
 }
 
 /* 库外文件管理器（ExternalFilesModal） */
-.modal.efi-files-modal {
+.modal.ev-files-modal {
   width: min(620px, calc(100vw - 32px));
   max-width: calc(100vw - 32px);
 }
-.efi-files-head {
+.ev-files-head {
   display: flex;
   align-items: center;
   gap: 12px;
   margin-bottom: 8px;
 }
-.efi-files-head h2 {
+.ev-files-head h2 {
   flex: none;
   margin: 0;
 }
-.efi-files-search {
+.ev-files-search {
   flex: 1 1 auto;
   min-width: 0;
 }
-.efi-files-search input {
+.ev-files-search input {
   width: 100%;
   box-sizing: border-box;
 }
-.efi-files-toolbar {
+.ev-files-toolbar {
   display: flex;
   align-items: center;
   gap: 12px;
   margin: 6px 0 10px;
 }
-.efi-files-all {
+.ev-files-all {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   cursor: pointer;
 }
-.efi-files-count {
+.ev-files-count {
   color: var(--text-muted);
   font-size: var(--font-ui-smaller);
 }
-.efi-files-list {
+.ev-files-list {
   max-height: 46vh;
   overflow-y: auto;
   overflow-x: hidden;
   border: 1px solid var(--background-modifier-border);
   border-radius: 8px;
 }
-.efi-files-row {
+.ev-files-row {
   display: flex;
   align-items: flex-start;
   gap: 10px;
@@ -143,24 +143,24 @@ textarea.efi-template-textarea {
   border-bottom: 1px solid var(--background-modifier-border);
   cursor: pointer;
 }
-.efi-files-row:last-child { border-bottom: none; }
-.efi-files-row:hover { background: var(--background-modifier-hover); }
-.efi-files-row input[type='checkbox'] { margin-top: 3px; flex: none; }
-.efi-files-main { flex: 1; min-width: 0; }
-.efi-files-name {
+.ev-files-row:last-child { border-bottom: none; }
+.ev-files-row:hover { background: var(--background-modifier-hover); }
+.ev-files-row input[type='checkbox'] { margin-top: 3px; flex: none; }
+.ev-files-main { flex: 1; min-width: 0; }
+.ev-files-name {
   font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.efi-files-path {
+.ev-files-path {
   color: var(--text-muted);
   font-size: var(--font-ui-smaller);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.efi-files-meta {
+.ev-files-meta {
   flex: 0 1 auto;
   max-width: 42%;
   margin-top: 2px;
@@ -170,7 +170,7 @@ textarea.efi-template-textarea {
   font-size: var(--font-ui-smaller);
   white-space: nowrap;
 }
-.efi-files-empty {
+.ev-files-empty {
   padding: 26px 12px;
   text-align: center;
   color: var(--text-muted);

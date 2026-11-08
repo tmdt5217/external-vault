@@ -30,7 +30,7 @@ An Obsidian plugin for editing Markdown notes **outside your vault**: paste or d
 
 - **社区插件商店**：上架后可在 Obsidian 的「第三方插件 → 浏览」中搜索安装。
 - **手动安装**：从 Releases 下载 `main.js`、`manifest.json`、`styles.css`，放入
-  `<vault>/.obsidian/plugins/external-file-image-pxm/`，然后在 Obsidian 中启用。
+  `<vault>/.obsidian/plugins/external-vault-pxm/`，然后在 Obsidian 中启用。
 
 ## 使用
 

@@ -1,7 +1,7 @@
 'use strict';
 
 /*
- * external-file-image-pxm  v1.9.2
+ * external-vault-pxm  v1.9.2
  *
  * 用途：Obsidian 1.14+ 编辑「仓库外的 Markdown 文件」时：
  *   1) 命令「新建库外 Markdown 文件」→ 在「库外 MD 目录」里创建 .md 并尝试打开
@@ -71,7 +71,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-const LOG = '[external-file-image-pxm]';
+const LOG = '[external-vault-pxm]';
 
 /** 简易模式内置目录，全部相对 vault 根目录（../ = 与库同级） */
 const SIMPLE_MD_REL = '../External Vault';
@@ -2522,7 +2522,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       } catch (e) { return String(e && e.message ? e.message : e); }
     };
     const out = {
-      plugin: 'external-file-image-pxm',
+      plugin: 'external-vault-pxm',
       apiVersion: obsidian.apiVersion || null,
       hasView: !!view,
       candidateViews: views.length,
@@ -2627,7 +2627,7 @@ class DeleteExternalNoteModal extends obsidian.Modal {
   onOpen() {
     const el = this.contentEl;
     el.empty();
-    el.addClass('external-file-image-modal');
+    el.addClass('external-vault-modal');
 
     el.createEl('h2', { text: '删除库外 Markdown（含附件）' });
 
@@ -2643,7 +2643,7 @@ class DeleteExternalNoteModal extends obsidian.Modal {
     if (this.shared.size) {
       lines.push('保留附件：' + this.shared.size + ' 个（仍被其他笔记引用）');
     }
-    el.createDiv({ cls: 'efi-preview' }).textContent = lines.join('\n');
+    el.createDiv({ cls: 'ev-preview' }).textContent = lines.join('\n');
 
     el.createEl('p', {
       cls: 'setting-item-description',
@@ -2653,7 +2653,7 @@ class DeleteExternalNoteModal extends obsidian.Modal {
         '只删除库外目录里的附件，库内附件一律保留。',
     });
 
-    const buttons = el.createDiv({ cls: 'efi-buttons' });
+    const buttons = el.createDiv({ cls: 'ev-buttons' });
     const ok = buttons.createEl('button', { text: '确认删除', cls: 'mod-warning' });
     const cancel = buttons.createEl('button', { text: '取消' });
     cancel.addEventListener('click', () => this.close());
@@ -2690,7 +2690,7 @@ class ExternalFilesModal extends obsidian.Modal {
   }
 
   async onOpen() {
-    try { this.modalEl.addClass('efi-files-modal'); } catch (e) { /* noop */ }
+    try { this.modalEl.addClass('ev-files-modal'); } catch (e) { /* noop */ }
     this.render();
     await this.load();
   }
@@ -2720,16 +2720,16 @@ class ExternalFilesModal extends obsidian.Modal {
   render() {
     const el = this.contentEl;
     el.empty();
-    el.addClass('external-file-image-modal');
+    el.addClass('external-vault-modal');
     if (this.stage === 'confirm' && this.confirmData) {
       this.renderConfirm(el);
       return;
     }
 
     const picking = this.mode === 'pick';
-    const head = el.createDiv({ cls: 'efi-files-head' });
+    const head = el.createDiv({ cls: 'ev-files-head' });
     head.createEl('h2', { text: picking ? '插入库外文件链接' : '库外文件' });
-    const searchWrap = head.createDiv({ cls: 'efi-files-search' });
+    const searchWrap = head.createDiv({ cls: 'ev-files-search' });
     const search = searchWrap.createEl('input', {
       type: 'search', placeholder: '搜索文件名或路径…',
     });
@@ -2746,8 +2746,8 @@ class ExternalFilesModal extends obsidian.Modal {
         : '目录：' + this.plugin.externalMdDir() + '　共 ' + this.files.length + ' 篇',
     });
 
-    const toolbar = el.createDiv({ cls: 'efi-files-toolbar' });
-    const all = toolbar.createEl('label', { cls: 'efi-files-all' });
+    const toolbar = el.createDiv({ cls: 'ev-files-toolbar' });
+    const all = toolbar.createEl('label', { cls: 'ev-files-all' });
     this.allBox = all.createEl('input', { type: 'checkbox' });
     this.allBox.addEventListener('change', () => {
       const rows = this.filtered();
@@ -2756,12 +2756,12 @@ class ExternalFilesModal extends obsidian.Modal {
       this.renderList();
     });
     all.createSpan({ text: '全选' });
-    this.countEl = toolbar.createSpan({ cls: 'efi-files-count', text: '已选 ' + this.selected.size + ' 篇' });
+    this.countEl = toolbar.createSpan({ cls: 'ev-files-count', text: '已选 ' + this.selected.size + ' 篇' });
 
-    this.listEl = el.createDiv({ cls: 'efi-files-list' });
+    this.listEl = el.createDiv({ cls: 'ev-files-list' });
     this.renderList();
 
-    const buttons = el.createDiv({ cls: 'efi-buttons' });
+    const buttons = el.createDiv({ cls: 'ev-buttons' });
     this.okBtn = buttons.createEl('button', {
       text: picking ? '插入' : '删除选中（含附件）',
       cls: picking ? 'mod-cta' : 'mod-warning',
@@ -2791,14 +2791,14 @@ class ExternalFilesModal extends obsidian.Modal {
     const rows = this.filtered();
     if (!rows.length) {
       this.listEl.createDiv({
-        cls: 'efi-files-empty',
+        cls: 'ev-files-empty',
         text: this.files.length ? '没有匹配的文件' : 'External Vault 里还没有 Markdown 文件',
       });
       this.updateFooter();
       return;
     }
     for (const f of rows) {
-      const row = this.listEl.createEl('label', { cls: 'efi-files-row' });
+      const row = this.listEl.createEl('label', { cls: 'ev-files-row' });
       const box = row.createEl('input', { type: 'checkbox' });
       box.checked = this.selected.has(f.abs);
       box.addEventListener('change', () => {
@@ -2806,10 +2806,10 @@ class ExternalFilesModal extends obsidian.Modal {
         else this.selected.delete(f.abs);
         this.updateFooter();
       });
-      const main = row.createDiv({ cls: 'efi-files-main' });
-      main.createDiv({ cls: 'efi-files-name', text: path.basename(f.abs) });
-      main.createDiv({ cls: 'efi-files-path', text: f.rel });
-      const meta = row.createDiv({ cls: 'efi-files-meta' });
+      const main = row.createDiv({ cls: 'ev-files-main' });
+      main.createDiv({ cls: 'ev-files-name', text: path.basename(f.abs) });
+      main.createDiv({ cls: 'ev-files-path', text: f.rel });
+      const meta = row.createDiv({ cls: 'ev-files-meta' });
       meta.textContent = (f.assets ? f.assets + ' 个附件' : '无附件') +
         (f.mtime ? ' · ' + new Date(f.mtime).toLocaleString() : '');
     }
@@ -2859,7 +2859,7 @@ class ExternalFilesModal extends obsidian.Modal {
         (plan.doomed.length > 8 ? '\n  · …' : ''));
     }
     if (plan.shared.size) lines.push('保留附件：' + plan.shared.size + ' 个（仍被其他笔记引用）');
-    el.createDiv({ cls: 'efi-preview' }).textContent = lines.join('\n');
+    el.createDiv({ cls: 'ev-preview' }).textContent = lines.join('\n');
     el.createEl('p', {
       cls: 'setting-item-description',
       text: (this.plugin.settings.cutUseTrash
@@ -2868,7 +2868,7 @@ class ExternalFilesModal extends obsidian.Modal {
         '只删除库外目录里的附件；库内附件一律保留。',
     });
 
-    const buttons = el.createDiv({ cls: 'efi-buttons' });
+    const buttons = el.createDiv({ cls: 'ev-buttons' });
     const ok = buttons.createEl('button', { text: '确认删除', cls: 'mod-warning' });
     ok.addEventListener('click', () => {
       ok.disabled = true;
@@ -2906,12 +2906,12 @@ class TransferConfirmModal extends obsidian.Modal {
   onOpen() {
     const el = this.contentEl;
     el.empty();
-    el.addClass('external-file-image-modal');
+    el.addClass('external-vault-modal');
 
     el.createEl('h2', { text: this.direction === 'in' ? '转入库：批量转移' : '移出库：批量转移' });
     let dest = '';
     try { dest = this.plugin.vaultPaths(this.direction).mdDestDir; } catch (e) { dest = '（未配置）'; }
-    const info = el.createDiv({ cls: 'efi-preview' });
+    const info = el.createDiv({ cls: 'ev-preview' });
     info.textContent =
       '来源：' + this.sourceDir + '\n' +
       '目标：' + dest + '\n' +
@@ -2929,7 +2929,7 @@ class TransferConfirmModal extends obsidian.Modal {
       .setDesc('开启后源文件从原位置直接删除，不再生成 .pxm-transferred 备份目录，不可撤销；关闭则只复制')
       .addToggle((t) => t.setValue(this.move).onChange((v) => { this.move = v; }));
 
-    const buttons = el.createDiv({ cls: 'efi-buttons' });
+    const buttons = el.createDiv({ cls: 'ev-buttons' });
     const ok = buttons.createEl('button', { text: '开始转移', cls: 'mod-cta' });
     const cancel = buttons.createEl('button', { text: '取消' });
     cancel.addEventListener('click', () => this.close());
@@ -2960,14 +2960,14 @@ class NewExternalNoteModal extends obsidian.Modal {
   onOpen() {
     const el = this.contentEl;
     el.empty();
-    el.addClass('external-file-image-modal');
+    el.addClass('external-vault-modal');
 
     el.createEl('h2', { text: '新建库外 Markdown 文件' });
 
-    const nameLabel = el.createDiv({ cls: 'efi-label', text: '文件名' });
-    const nameInput = el.createEl('input', { type: 'text', cls: 'efi-input', placeholder: '不用写 .md' });
+    const nameLabel = el.createDiv({ cls: 'ev-label', text: '文件名' });
+    const nameInput = el.createEl('input', { type: 'text', cls: 'ev-input', placeholder: '不用写 .md' });
 
-    const buttons = el.createDiv({ cls: 'efi-buttons' });
+    const buttons = el.createDiv({ cls: 'ev-buttons' });
     const ok = buttons.createEl('button', { text: '创建并打开', cls: 'mod-cta' });
     const cancel = buttons.createEl('button', { text: '取消' });
     cancel.addEventListener('click', () => this.close());
@@ -3011,8 +3011,8 @@ class ExternalFileImageSettingTab extends obsidian.PluginSettingTab {
     const el = this.containerEl;
     el.empty();
     // 只给本插件的设置页加标记，避免分组标题样式影响 Obsidian 其它设置页
-    if (typeof el.addClass === 'function') el.addClass('efi-settings');
-    else if (el.classList && typeof el.classList.add === 'function') el.classList.add('efi-settings');
+    if (typeof el.addClass === 'function') el.addClass('ev-settings');
+    else if (el.classList && typeof el.classList.add === 'function') el.classList.add('ev-settings');
     const save = async (key, value) => {
       this.plugin.settings[key] = value;
       await this.plugin.saveData(this.plugin.settings);
@@ -3043,7 +3043,7 @@ class ExternalFileImageSettingTab extends obsidian.PluginSettingTab {
     const mdAbs = this.plugin.externalMdDir();
     const assetAbs = this.plugin.externalAssetDir();
     const relLink = (mdAbs && assetAbs) ? relativeFromMd(mdAbs, assetAbs) : '';
-    const preview = el.createDiv({ cls: 'efi-settings-preview' });
+    const preview = el.createDiv({ cls: 'ev-settings-preview' });
     preview.textContent =
       '库外 MD 目录：' + this.plugin.mdRel() + '\n' +
       '        → ' + (mdAbs || '?') + '\n' +
@@ -3130,7 +3130,7 @@ class ExternalFileImageSettingTab extends obsidian.PluginSettingTab {
         };
       } catch (e) { return { dir: '?', raw: '' }; }
     })();
-    const menuPreview = el.createDiv({ cls: 'efi-settings-preview' });
+    const menuPreview = el.createDiv({ cls: 'ev-settings-preview' });
     menuPreview.textContent =
       '移出 Vault：MD → ' + (mdAbs || '?') + '\n' +
       '             附件 → ' + (assetAbs || '?') + '\n' +
@@ -3258,8 +3258,8 @@ class ExternalFileImageSettingTab extends obsidian.PluginSettingTab {
           const box = t.inputEl;
           if (box) {
             box.rows = 8;
-            if (box.classList && typeof box.classList.add === 'function') box.classList.add('efi-template-textarea');
-            else box.className = 'efi-template-textarea';
+            if (box.classList && typeof box.classList.add === 'function') box.classList.add('ev-template-textarea');
+            else box.className = 'ev-template-textarea';
           }
           t.setPlaceholder(DEFAULT_NOTE_TEMPLATE_TEXT)
             .setValue(this.plugin.settings.noteTemplateText || '')
