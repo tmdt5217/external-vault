@@ -1782,7 +1782,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
         const mdDir = this.externalMdDir();
         const idx = await this.loadExternalIndex();
         if (!idx || idx.root !== mdDir) return;
-        const files = await this.scanExternalFiles();
+        const files = await this.scanExternalFiles(idx.files);
         const changed = JSON.stringify(files.map((f) => [f.abs, f.mtime, f.size, f.aliases]))
           !== JSON.stringify(idx.files.map((f) => [f.abs, f.mtime, f.size, f.aliases]));
         if (!changed) return;
@@ -1794,7 +1794,9 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     }, 5000);
   }
 
-  async scanExternalFiles() {
+  async scanExternalFiles(prevFiles) {
+    const prevMap = new Map();
+    for (const f of prevFiles || []) prevMap.set(path.resolve(f.abs), f);
     const mdDir = this.externalMdDir();
     const assetDir = this.externalAssetDir();
     const files = [];
@@ -1809,20 +1811,26 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
         assets = this.assetPathsIn(abs)
           .filter((a) => !isInsideVault(a, this.app) && fs.existsSync(a)).length;
       } catch (e) { /* noop */ }
-      let aliases = [];
-      let links = [];
-      try {
-        const text = await fs.promises.readFile(abs, 'utf8');
-        aliases = parseFrontmatterAliases(text);
-        links = extractLinkNames(text);
-      } catch (e) { /* noop */ }
+      const prev = prevMap.get(path.resolve(abs));
+      const mtime = st ? st.mtimeMs : 0;
+      const size = st ? st.size : 0;
+      let aliases = prev ? (prev.aliases || []) : [];
+      let links = prev ? (prev.links || []) : [];
+      // 只有新文件或 mtime/size 变化时才重新读正文
+      if (!prev || prev.mtime !== mtime || prev.size !== size) {
+        try {
+          const text = await fs.promises.readFile(abs, 'utf8');
+          aliases = parseFrontmatterAliases(text);
+          links = extractLinkNames(text);
+        } catch (e) { /* noop */ }
+      }
       seen.add(path.resolve(abs));
       files.push({
         abs,
         rel: path.relative(mdDir, abs).split(path.sep).join('/'),
-        mtime: st ? st.mtimeMs : 0,
+        mtime,
         ctime: st ? st.birthtimeMs : 0,
-        size: st ? st.size : 0,
+        size,
         assets,
         aliases,
         links,
