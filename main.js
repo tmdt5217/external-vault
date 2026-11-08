@@ -2204,6 +2204,12 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       mc.getFirstLinkpathDest = (linkpath, sourcePath) => {
         const hit = orig(linkpath, sourcePath);
         if (hit) return hit;
+        // 库外笔记里的链接：sourcePath 不在 vault 索引中，原生解析会失败；
+        // 再用空 sourcePath 让 Obsidian 按文件名 / 别名全局匹配库内文件
+        try {
+          const inVault = orig(linkpath, '');
+          if (inVault) return inVault;
+        } catch (e) { /* noop */ }
         const key = String(sourcePath || '') + '|' + String(linkpath || '');
         const now = Date.now();
         const cached = cache.get(key);
