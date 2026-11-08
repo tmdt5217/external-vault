@@ -3076,13 +3076,9 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       }
     }
 
-    let opened = openedInPlace;
-    if (direction === 'in') {
-      if (!openedInPlace) {
-        const rel = path.relative(vRoot, plans[0].dest).split(path.sep).join('/');
-        opened = await this.openImportedNote(rel);
-      }
-    } else {
+    // 移入后不主动打开目标笔记：保留当前正在看的笔记，避免当前标签被替换
+    const opened = openedInPlace;
+    if (direction !== 'in') {
       // 多选移出时复制目标目录（比只复制第一篇笔记的路径更有用）
       try {
         await navigator.clipboard.writeText(plans.length > 1 ? mdDestDir : plans[0].dest);
