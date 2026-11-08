@@ -973,6 +973,24 @@ function escapeRegExp(s) {
   return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+/** 从正文提取链接目标名（wiki / markdown 两种），用于反向索引 */
+function extractLinkNames(text) {
+  const out = new Set();
+  const wiki = /\[\[([^\]|#]+)/g;
+  let m;
+  while ((m = wiki.exec(text))) out.add(m[1].trim());
+  const md = /\[[^\]]*\]\(([^)]+)\)/g;
+  while ((m = md.exec(text))) {
+    const raw = m[1].replace(/^<|>$/g, '');
+    try {
+      const decoded = decodeURIComponent(raw);
+      const base = path.basename(decoded, path.extname(decoded));
+      if (base) out.add(base);
+    } catch (e) { /* noop */ }
+  }
+  return Array.from(out);
+}
+
 /** 时间戳 → YYYY-MM-DD HH:mm */
 function fmtDateTime(ms) {
   if (!ms) return '';
@@ -1695,7 +1713,88 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
   }
 
   /** 读取库外文件列表：MD（含别名/附件数）+ 图片/PDF/其他文件，弹窗与侧边栏共用 */
+  /** 面板/搜索入口：优先读持久化索引，秒开；后台再做增量刷新 */
   async listExternalEntries() {
+    const mdDir = this.externalMdDir();
+    if (!mdDir) return [];
+    const idx = await this.loadExternalIndex();
+    if (idx && idx.root === mdDir && Array.isArray(idx.files) && idx.files.length) {
+      this.hydrateExternalCaches(idx.files);
+      this.scheduleIndexRefresh();
+      return idx.files.slice().sort((a, b) => b.mtime - a.mtime);
+    }
+    const files = await this.scanExternalFiles();
+    await this.saveExternalIndex(files, mdDir);
+    this.hydrateExternalCaches(files);
+    return files.sort((a, b) => b.mtime - a.mtime);
+  }
+
+  externalIndexPath() {
+    const root = vaultRoot(this.app);
+    return root ? path.join(root, '.obsidian', 'plugins', 'external-vault', 'index.json') : null;
+  }
+
+  async loadExternalIndex() {
+    const p = this.externalIndexPath();
+    if (!p || !fs.existsSync(p)) return null;
+    try {
+      const data = JSON.parse(await fs.promises.readFile(p, 'utf8'));
+      return data && Array.isArray(data.files) ? data : null;
+    } catch (e) { return null; }
+  }
+
+  async saveExternalIndex(files, root) {
+    const p = this.externalIndexPath();
+    if (!p) return;
+    try {
+      await fs.promises.mkdir(path.dirname(p), { recursive: true });
+      await fs.promises.writeFile(p, JSON.stringify({
+        version: 1, root, built: Date.now(), files,
+      }), 'utf8');
+    } catch (e) { /* noop */ }
+  }
+
+  /** 用文件列表填充文件名 / 别名缓存 */
+  hydrateExternalCaches(files) {
+    if (!this._externalNameCache) this._externalNameCache = new Map();
+    if (!this._refIndex) this._refIndex = new Map();
+    for (const f of files) {
+      if (f.kind !== 'md') continue;
+      const base = path.basename(f.abs, path.extname(f.abs));
+      if (!this._externalNameCache.has(base)) this._externalNameCache.set(base, f.abs);
+      for (const a of (f.aliases || [])) {
+        const key = String(a || '').trim();
+        if (key && !this._externalNameCache.has(key)) this._externalNameCache.set(key, f.abs);
+      }
+      for (const n of (f.links || [])) {
+        if (!this._refIndex.has(n)) this._refIndex.set(n, []);
+        this._refIndex.get(n).push(f.abs);
+      }
+    }
+  }
+
+  /** 索引存在时，后台做一次增量校准（5 秒防抖） */
+  scheduleIndexRefresh() {
+    if (this._indexTimer) return;
+    this._indexTimer = window.setTimeout(async () => {
+      this._indexTimer = null;
+      try {
+        const mdDir = this.externalMdDir();
+        const idx = await this.loadExternalIndex();
+        if (!idx || idx.root !== mdDir) return;
+        const files = await this.scanExternalFiles();
+        const changed = JSON.stringify(files.map((f) => [f.abs, f.mtime, f.size, f.aliases]))
+          !== JSON.stringify(idx.files.map((f) => [f.abs, f.mtime, f.size, f.aliases]));
+        if (!changed) return;
+        this._externalNameCache = new Map();
+        await this.saveExternalIndex(files, mdDir);
+        this.hydrateExternalCaches(files);
+        this.refreshExternalPanels();
+      } catch (e) { /* noop */ }
+    }, 5000);
+  }
+
+  async scanExternalFiles() {
     const mdDir = this.externalMdDir();
     const assetDir = this.externalAssetDir();
     const files = [];
@@ -1711,8 +1810,12 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
           .filter((a) => !isInsideVault(a, this.app) && fs.existsSync(a)).length;
       } catch (e) { /* noop */ }
       let aliases = [];
-      try { aliases = parseFrontmatterAliases(await fs.promises.readFile(abs, 'utf8')); }
-      catch (e) { /* noop */ }
+      let links = [];
+      try {
+        const text = await fs.promises.readFile(abs, 'utf8');
+        aliases = parseFrontmatterAliases(text);
+        links = extractLinkNames(text);
+      } catch (e) { /* noop */ }
       seen.add(path.resolve(abs));
       files.push({
         abs,
@@ -1722,6 +1825,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
         size: st ? st.size : 0,
         assets,
         aliases,
+        links,
         kind: 'md',
       });
     }
@@ -2013,13 +2117,12 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     for (const f of this.app.vault.getMarkdownFiles()) {
       targets.push({ abs: path.resolve(vRoot, f.path), file: f });
     }
-    // 库外笔记里也可能引用它，一并改写
-    try {
-      const entries = await this.listExternalEntries();
-      for (const e of entries) {
-        if (e.kind === 'md') targets.push({ abs: e.abs, file: null });
-      }
-    } catch (e) { /* noop */ }
+    // 库外：用反向索引只挑引用了目标名的笔记，避免扫 10 万个文件
+    const extRefs = new Set();
+    for (const name of byName.keys()) {
+      for (const abs of (this._refIndex && this._refIndex.get(name)) || []) extRefs.add(abs);
+    }
+    for (const abs of extRefs) targets.push({ abs, file: null });
     this.dbg('引用扫描：' + targets.length + ' 个文件，目标 ' +
       records.map((r) => path.basename(r.src)).join('、'));
     const rewriteOne = async (t) => {

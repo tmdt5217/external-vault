@@ -10,3 +10,4 @@ backups/
 # macOS
 .DS_Store
 .undo/
+index.json
