@@ -119,14 +119,7 @@ span.cm-hmd-internal-link.ev-external-link .cm-underline,
   text-decoration: none;
 }
 
-/* 库外笔记的标签页标题：追加「（外）」 */
-.ev-external-tab::after {
-  content: '（外）';
-  margin-left: 2px;
-  color: var(--text-muted);
-  font-size: 0.85em;
-  font-weight: 400;
-}
+/* 「（外）」后缀已移除，仅保留红色区分 */
 
 /* 右侧边栏：库外文件面板 */
 .ev-panel { padding: 8px; }
