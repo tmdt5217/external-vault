@@ -3367,15 +3367,23 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
   /** 源 MD 被移走前，关掉指向它的标签页 */
   /** 把打开某库外文件的标签重定向到库内文件，保持当前笔记不切换 */
   retargetLeaves(srcAbs, targetFile) {
-    this.app.workspace.getLeavesOfType('markdown').forEach((leaf) => {
+    const ws = this.app.workspace;
+    const prev = ws.activeLeaf;
+    const targets = [];
+    ws.getLeavesOfType('markdown').forEach((leaf) => {
       try {
         const v = leaf.view;
         const abs = v && v.file ? externalAbsFromFile(v.file, this.app) : null;
-        if (abs && path.resolve(abs) === path.resolve(srcAbs)) {
-          leaf.openFile(targetFile);
-        }
+        if (abs && path.resolve(abs) === path.resolve(srcAbs)) targets.push(leaf);
       } catch (e) { /* noop */ }
     });
+    for (const leaf of targets) {
+      try { leaf.openFile(targetFile, { active: false }); } catch (e) { /* noop */ }
+    }
+    // openFile 会激活目标标签；恢复原来的活动标签，避免跳到被移动的笔记
+    if (prev && targets.indexOf(prev) === -1) {
+      try { ws.setActiveLeaf(prev, { focus: true }); } catch (e) { /* noop */ }
+    }
   }
 
   detachLeaves(predicate) {
