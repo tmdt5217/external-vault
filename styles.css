@@ -71,29 +71,20 @@ textarea.ev-template-textarea {
 .cm-hmd-internal-link.pxm-external-link,
 .cm-link.pxm-external-link {
   color: var(--color-red, #e05252) !important;
-  text-decoration: underline;
-  text-decoration-color: currentColor;
-  text-decoration-thickness: 1px;
-  text-underline-offset: 2px;
+  text-decoration: none !important;
   border-bottom: none;
   background-image: none;
 }
 .pxm-external-link::after,
 .cm-hmd-internal-link.pxm-external-link::after,
 .cm-link.pxm-external-link::after {
-  content: '↗';
-  margin-left: 3px;
-  font-size: 0.72em;
-  font-weight: 400;
-  vertical-align: super;
-  color: #ff7ab8;
-  opacity: 1;
+  content: none;
 }
 .pxm-external-link:hover,
 .cm-hmd-internal-link.pxm-external-link:hover,
 .cm-link.pxm-external-link:hover {
   color: var(--color-red, #e05252) !important;
-  text-decoration-thickness: 2px;
+  text-decoration: none !important;
 }
 
 /* 库外文件管理器（ExternalFilesModal） */
