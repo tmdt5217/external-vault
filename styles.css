@@ -156,18 +156,20 @@ span.cm-hmd-internal-link.ev-external-link .cm-underline,
 }
 .ev-panel .nav-folder-title-content { margin-left: 0; padding-left: 0; }
 .ev-panel .nav-folder-collapse-indicator svg { width: 14px; height: 14px; }
-/* 根级文件与文件夹名对齐（给箭头留出位置） */
-.ev-panel .nav-files-container > .nav-file > .nav-file-title { padding-left: 24px; }
-/* 选中态只换背景，不能改变文字起点；也去掉主题加的圆点伪元素 */
-.ev-panel .nav-file-title.is-active,
-.ev-panel .nav-files-container > .nav-file > .nav-file-title.is-active {
-  padding-left: 8px;
-}
-.ev-panel .nav-files-container > .nav-file > .nav-file-title.is-active { padding-left: 24px; }
+/* 文件行左侧留出固定 16px 圆点槽，选中时只填圆点，文字起点不变 */
+.ev-panel .nav-files-container > .nav-file > .nav-file-title { padding-left: 8px; }
 .ev-panel .nav-file-title.is-active::before,
 .ev-panel .nav-file-title.is-active::after {
   content: none;
   display: none;
+}
+.ev-panel .ev-panel-bullet {
+  width: 16px;
+  flex: none;
+  text-align: center;
+  line-height: 1;
+  font-weight: 700;
+  color: var(--text-normal);
 }
 .ev-panel .nav-file-title:hover,
 .ev-panel .nav-folder-title:hover,

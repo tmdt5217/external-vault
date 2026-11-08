@@ -4439,6 +4439,7 @@ class ExternalVaultView extends obsidian.ItemView {
       const title = fileEl.createDiv({
         cls: 'tree-item-self nav-file-title' + (active ? ' is-active' : ''),
       });
+      title.createDiv({ cls: 'ev-panel-bullet', text: active ? '•' : '' });
       const content = title.createDiv({
         cls: 'tree-item-inner nav-file-title-content',
         text: path.basename(f.abs, path.extname(f.abs)),
