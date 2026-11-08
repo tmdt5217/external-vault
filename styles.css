@@ -126,12 +126,39 @@ span.cm-hmd-internal-link.ev-external-link .cm-underline,
 .ev-panel-head input { flex: 1; min-width: 0; }
 .ev-panel-actions { display: flex; gap: 4px; }
 .ev-panel-btn { font-size: var(--font-ui-smaller); padding: 2px 6px; height: auto; }
-.ev-panel-list { display: flex; flex-direction: column; gap: 2px; }
-.ev-panel-row { padding: 6px 8px; border-radius: 6px; cursor: pointer; user-select: none; }
-.ev-panel-row:hover { background: var(--background-modifier-hover); }
-.ev-panel-row.is-active { background: var(--background-modifier-hover); }
-.ev-panel-name { font-size: var(--font-ui-small); font-weight: 500; }
-.ev-panel-meta { font-size: var(--font-ui-smaller); color: var(--text-muted); }
+.ev-panel-list { display: flex; flex-direction: column; gap: 1px; }
+.ev-panel-row,
+.ev-panel-folder {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  user-select: none;
+  color: var(--nav-item-color, var(--text-normal));
+  font-size: var(--nav-item-size, var(--font-ui-small));
+}
+.ev-panel-row:hover,
+.ev-panel-folder:hover { background: var(--nav-item-background-hover, var(--background-modifier-hover)); }
+.ev-panel-row.is-active { background: var(--nav-item-background-active, var(--background-modifier-hover)); }
+.ev-panel-arrow { width: 12px; font-size: 10px; color: var(--text-muted); }
+.ev-panel-icon {
+  display: flex;
+  width: 16px;
+  height: 16px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+}
+.ev-panel-icon svg { width: 14px; height: 14px; }
+.ev-panel-name,
+.ev-panel-folder-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .ev-panel-empty { padding: 12px 8px; color: var(--text-muted); font-size: var(--font-ui-small); }
 
 /* 库外文件管理器（ExternalFilesModal） */

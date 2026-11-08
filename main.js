@@ -1604,14 +1604,14 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
         kind: 'md',
       });
     }
-    const walk = async (dir, base) => {
+    const walk = async (dir, base, prefix) => {
       let entries = [];
       try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); }
       catch (e) { return; }
       for (const en of entries) {
         if (en.name.startsWith('.')) continue;
         const p = path.join(dir, en.name);
-        if (en.isDirectory()) { await walk(p, base); continue; }
+        if (en.isDirectory()) { await walk(p, base, prefix); continue; }
         if (!en.isFile() || isMdPath(en.name)) continue;
         const rp = path.resolve(p);
         if (seen.has(rp)) continue;
@@ -1622,7 +1622,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
         const kind = ext === 'pdf' ? 'pdf' : (isImageFile({ name: en.name }) ? 'image' : 'file');
         files.push({
           abs: p,
-          rel: path.relative(base, p).split(path.sep).join('/'),
+          rel: (prefix || '') + path.relative(base, p).split(path.sep).join('/'),
           mtime: st ? st.mtimeMs : 0,
           size: st ? st.size : 0,
           assets: 0,
@@ -1631,10 +1631,14 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
         });
       }
     };
-    if (assetDir && fs.existsSync(assetDir)) await walk(assetDir, assetDir);
+    const assetInsideMd = mdDir && assetDir &&
+      path.resolve(assetDir).startsWith(path.resolve(mdDir) + path.sep);
+    if (assetDir && fs.existsSync(assetDir)) {
+      await walk(assetDir, assetInsideMd ? mdDir : assetDir, assetInsideMd ? '' : 'attachments/');
+    }
     if (mdDir && fs.existsSync(mdDir) &&
       path.resolve(mdDir) !== path.resolve(assetDir || '')) {
-      await walk(mdDir, mdDir);
+      await walk(mdDir, mdDir, '');
     }
     return files.sort((a, b) => b.mtime - a.mtime);
   }
@@ -4258,21 +4262,63 @@ class ExternalVaultView extends obsidian.ItemView {
     if (!rows.length) {
       this.listEl.createDiv({
         cls: 'ev-panel-empty',
-        text: this.files.length ? tr('没有匹配的文件') : tr('还没有库外 Markdown 文件'),
+        text: this.files.length ? tr('没有匹配的文件') : tr('还没有库外文件'),
       });
       return;
     }
-    for (const f of rows) {
-      const row = this.listEl.createDiv({ cls: 'ev-panel-row' });
-      const nameLine = row.createDiv({ cls: 'ev-panel-name' });
-      nameLine.createSpan({ text: path.basename(f.abs, path.extname(f.abs)) });
-      const bits = [];
-      if (f.kind === 'md') {
-        if (f.aliases && f.aliases.length) bits.push(f.aliases.join(' / '));
-      } else {
-        bits.push(formatBytes(f.size));
+    this.renderNode(this.buildTree(rows), 0, this.listEl);
+  }
+
+  /** 按相对路径建目录树 */
+  buildTree(files) {
+    const root = { dirs: new Map(), files: [] };
+    for (const f of files) {
+      const parts = String(f.rel || '').split('/');
+      parts.pop();
+      let node = root;
+      for (const name of parts) {
+        if (!name || name === '.') continue;
+        if (!node.dirs.has(name)) node.dirs.set(name, { dirs: new Map(), files: [] });
+        node = node.dirs.get(name);
       }
-      if (bits.length) row.createDiv({ cls: 'ev-panel-meta', text: bits.join(' · ') });
+      node.files.push(f);
+    }
+    return root;
+  }
+
+  renderNode(node, depth, container) {
+    const dirs = Array.from(node.dirs.keys()).sort((a, b) => a.localeCompare(b, 'zh'));
+    for (const name of dirs) {
+      const child = node.dirs.get(name);
+      const folder = container.createDiv({ cls: 'ev-panel-folder' });
+      folder.style.paddingLeft = (8 + depth * 14) + 'px';
+      const arrow = folder.createSpan({ cls: 'ev-panel-arrow', text: '▾' });
+      const icon = folder.createSpan({ cls: 'ev-panel-icon' });
+      if (obsidian.setIcon) obsidian.setIcon(icon, 'lucide-folder');
+      folder.createSpan({ cls: 'ev-panel-folder-name', text: name });
+      const children = container.createDiv({ cls: 'ev-panel-children' });
+      this.renderNode(child, depth + 1, children);
+      let open = true;
+      folder.addEventListener('click', () => {
+        open = !open;
+        children.style.display = open ? '' : 'none';
+        arrow.textContent = open ? '▾' : '▸';
+      });
+    }
+    const files = node.files.slice().sort((a, b) =>
+      path.basename(a.abs).localeCompare(path.basename(b.abs), 'zh'));
+    for (const f of files) {
+      const row = container.createDiv({ cls: 'ev-panel-row' });
+      row.style.paddingLeft = (8 + depth * 14) + 'px';
+      const icon = row.createSpan({ cls: 'ev-panel-icon' });
+      if (obsidian.setIcon) {
+        obsidian.setIcon(icon, f.kind === 'image' ? 'lucide-image'
+          : (f.kind === 'pdf' || f.kind === 'md' ? 'lucide-file-text' : 'lucide-file'));
+      }
+      row.createSpan({
+        cls: 'ev-panel-name',
+        text: path.basename(f.abs, path.extname(f.abs)),
+      });
       row.addEventListener('click', () => {
         this.listEl.querySelectorAll('.ev-panel-row.is-active')
           .forEach((x) => x.classList.remove('is-active'));
