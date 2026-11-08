@@ -2029,6 +2029,15 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       let raw = String(linktext || '').trim();
       if (!raw) return null;
       if (raw.startsWith('<') && raw.endsWith('>')) raw = raw.slice(1, -1);
+      // 文件名本身可能带 #（如「第1章#2.md」），先按完整写法试一次，再按标题锚点截断
+      let decoded = raw;
+      try { decoded = decodeURIComponent(raw); } catch (e) { /* 保留原样 */ }
+      const hashDir = this.externalMdDir();
+      if (decoded.includes('#') && hashDir && !decoded.includes('/')) {
+        for (const p of [path.join(hashDir, decoded), path.join(hashDir, decoded + '.md')]) {
+          if (isMdPath(p) && !isInsideVault(p, this.app) && fs.existsSync(p)) return p;
+        }
+      }
       raw = raw.split('#')[0].trim();
       if (!raw) return null;
       try { raw = decodeURIComponent(raw); } catch (e) { /* 保留原样 */ }
