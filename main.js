@@ -1,7 +1,7 @@
 'use strict';
 
 /*
- * external-vault-pxm  v1.9.2
+ * external-vault-pxm  v1.10.0
  *
  * 用途：Obsidian 1.14+ 编辑「仓库外的 Markdown 文件」时：
  *   1) 命令「新建库外 Markdown 文件」→ 在「库外 MD 目录」里创建 .md 并尝试打开
@@ -901,10 +901,10 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     });
 
     this.patchOpenLinkText();
-    this.patchHoverLink();
+    this.patchFirstLinkpathDest();
     this.setupExternalLinkRendering();
 
-    console.log(LOG, 'loaded v1.9.2', 'md=', this.mdRel(), 'assets=', this.assetRel(),
+    console.log(LOG, 'loaded v1.10.0', 'md=', this.mdRel(), 'assets=', this.assetRel(),
       'TExternalFile=', !!(obsidian.TExternalFile));
   }
 
@@ -1340,14 +1340,14 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
   }
 
   /**
-   * 库外链接的渲染与悬停处理：
-   * 1) 阅读视图把指向库外的 internal-link 改成 external-link，样式与库内链接区分，
-   *    Hover Editor / 原生预览也不会再把它当成「未创建的笔记」。
-   * 2) 点击这类链接由插件用绝对路径打开（相对路径仍留在源文件里，可移植）。
-   * 3) 编辑视图的链接仍是 internal-link，悬停时拦住冒泡，避免 Hover Editor 误判。
+   * 库外链接的渲染：
+   * 1) 保留 internal-link，只附加 pxm-external-link 做视觉区分——这样 Obsidian 仍会
+   *    发出 hover-link 事件，Hover Editor / 原生预览才能弹出真实内容。
+   * 2) 配合 patchFirstLinkpathDest，把库外目标解析成 TExternalFile。
+   * 3) 编辑视图用 CodeMirror 装饰器做同样的标记。
    */
   setupExternalLinkRendering() {
-    // 1) 阅读视图：改成真正的外部链接，并去掉 data-href，Hover Editor 不会再按内部链接解析
+    // 1) 阅读视图：保留 internal-link，只加标记
     this.registerMarkdownPostProcessor((el, ctx) => {
       try {
         if (!ctx || !ctx.sourcePath || String(ctx.sourcePath).startsWith('file:')) return;
@@ -1357,11 +1357,8 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
           if (!href) continue;
           const abs = this.externalTargetForLink(href, ctx.sourcePath);
           if (!abs) continue;
-          a.classList.remove('internal-link');
-          a.classList.add('external-link', 'pxm-external-link');
+          a.classList.add('pxm-external-link');
           a.setAttribute('data-pxm-abs', abs);
-          a.removeAttribute('data-href');
-          a.setAttribute('href', 'file://' + abs.split(path.sep).join('/'));
           a.setAttribute('title', '库外文件：' + abs);
         }
       } catch (e) { this.dbg('标记库外链接失败', e.message); }
@@ -1414,11 +1411,11 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       this.registerEditorExtension(plugin);
     } catch (e) { this.dbg('编辑视图链接装饰器不可用', e.message); }
 
-    // 4) 编辑视图悬停：拦住 Hover Editor / 原生预览的「未创建」误判
+    // 4) 兜底：装饰器不可用时，悬停补 class；不拦截事件，保证 Hover Editor 能收到 hover
     this.registerDomEvent(document, 'mouseover', (e) => {
       const t = e.target;
       if (!t || typeof t.closest !== 'function') return;
-      const el = t.closest('.internal-link, .cm-hmd-internal-link, .cm-link, .pxm-external-link, [data-href]');
+      const el = t.closest('.internal-link, .cm-hmd-internal-link, .cm-link, [data-href]');
       if (!el) return;
       const inner = el.querySelector && el.querySelector('[data-href]');
       const href = el.getAttribute('data-href') || el.getAttribute('href') ||
@@ -1427,42 +1424,51 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       const abs = this.externalTargetForLink(href, this.activeSourcePath());
       if (!abs) return;
       el.classList.add('pxm-external-link');
-      e.stopPropagation();
-      if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
     }, true);
   }
 
   /**
-   * Hover Editor / 原生预览都订阅 workspace 的 hover-link 事件。
-   * 库外文件不在库索引里，事件一旦发出就会被判定为「未创建」。
-   * 这里在事件源头吞掉指向库外的 hover-link，DOM 层的拦截只作为兜底。
+   * Hover Editor 和原生预览都用 metadataCache.getFirstLinkpathDest 找目标。
+   * 库外文件不在索引里，返回 null 就会被当成「未创建」。
+   * 这里在找不到时补一个 TExternalFile，让它们走正常预览流程。
    */
-  patchHoverLink() {
+  patchFirstLinkpathDest() {
     try {
-      const ws = this.app.workspace;
-      if (!ws || typeof ws.trigger !== 'function' || ws.__pxmHoverLinkPatched) return;
-      const orig = ws.trigger.bind(ws);
-      ws.trigger = (name, ...args) => {
-        if (name === 'hover-link') {
-          const data = args[0] || {};
-          const abs = this.externalTargetForLink(data.linktext, data.sourcePath);
-          if (abs) {
-            this.dbg('已拦截库外链接的 hover-link', abs);
-            return;
-          }
+      const mc = this.app.metadataCache;
+      if (!mc || typeof mc.getFirstLinkpathDest !== 'function' || mc.__pxmExternalResolvePatched) return;
+      const orig = mc.getFirstLinkpathDest.bind(mc);
+      const cache = new Map();
+      mc.getFirstLinkpathDest = (linkpath, sourcePath) => {
+        const hit = orig(linkpath, sourcePath);
+        if (hit) return hit;
+        const key = String(sourcePath || '') + '|' + String(linkpath || '');
+        const now = Date.now();
+        const cached = cache.get(key);
+        let abs = null;
+        if (cached && now - cached.t < 3000) {
+          abs = cached.abs;
+        } else {
+          abs = this.externalTargetForLink(linkpath, sourcePath);
+          if (cache.size > 400) cache.clear();
+          cache.set(key, { abs, t: now });
         }
-        return orig(name, ...args);
+        if (!abs) return hit;
+        try {
+          const f = this.app.vault.getFileByPath('file:' + abs);
+          if (f) return f;
+        } catch (e) { /* noop */ }
+        return hit;
       };
-      ws.__pxmHoverLinkPatched = true;
+      mc.__pxmExternalResolvePatched = true;
       this.register(() => {
         try {
-          if (!ws.__pxmHoverLinkPatched) return;
-          ws.trigger = orig;
-          delete ws.__pxmHoverLinkPatched;
+          if (!mc.__pxmExternalResolvePatched) return;
+          mc.getFirstLinkpathDest = orig;
+          delete mc.__pxmExternalResolvePatched;
         } catch (e) { /* noop */ }
       });
-      this.dbg('hover-link 已接管库外链接');
-    } catch (e) { this.dbg('patch hover-link 失败', e.message); }
+      this.dbg('getFirstLinkpathDest 已接管库外链接');
+    } catch (e) { this.dbg('patch getFirstLinkpathDest 失败', e.message); }
   }
 
   /** 当前活动笔记的 vault 相对路径，供链接解析使用 */
