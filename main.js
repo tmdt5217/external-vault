@@ -2008,7 +2008,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
    * vault.create() 抛 "File already exists."，被 openLinkText 自己 catch 成黑色提示。
    * 所以这里先等索引就绪，拿到 TFile 后走 leaf.openFile()，完全不碰创建逻辑。
    */
-  async openImportedNote(rel) {
+  async openImportedNote(rel, targetLeaf) {
     const ws = this.app.workspace;
     const vault = this.app.vault;
     const mc = this.app.metadataCache;
@@ -2033,7 +2033,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       const f = find();
       if (f) {
         try {
-          const leaf = typeof ws.getLeaf === 'function' ? ws.getLeaf(false) : null;
+          const leaf = targetLeaf || (typeof ws.getLeaf === 'function' ? ws.getLeaf(false) : null);
           if (leaf && typeof leaf.openFile === 'function') {
             await leaf.openFile(f);
             return true;
@@ -2094,6 +2094,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       ? options.moveSource : this.settings.moveSourceAfterTransfer;
     let cut = { removed: 0, trashed: 0, failed: [] };
     let skipped = '';
+    let openedInPlace = false;
     if (doMove) {
       const destFiles = new Set(plans.map((p) => p.dest).concat(Array.from(assetMap.values())));
       // 删源前的最后一道闸：目标文件必须全部确实写盘，否则保留源文件
@@ -2104,7 +2105,8 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       } else {
         // 源 MD 即将被移走：先关掉指向它的标签页，避免留下裂图/已删除标签页
         if (typeof options.beforeRemove === 'function') {
-          try { await options.beforeRemove(plans); } catch (e) { this.dbg('转移前关闭标签页失败', e.message); }
+          try { openedInPlace = !!(await options.beforeRemove(plans)); }
+          catch (e) { this.dbg('转移前切换标签页失败', e.message); }
         }
         // 被其他笔记共用的附件只复制、保留原件，避免弄断别人的链接
         const keep = options.keepAssetSources instanceof Set ? options.keepAssetSources : new Set();
@@ -2115,10 +2117,12 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       }
     }
 
-    let opened = false;
+    let opened = openedInPlace;
     if (direction === 'in') {
-      const rel = path.relative(vRoot, plans[0].dest).split(path.sep).join('/');
-      opened = await this.openImportedNote(rel);
+      if (!openedInPlace) {
+        const rel = path.relative(vRoot, plans[0].dest).split(path.sep).join('/');
+        opened = await this.openImportedNote(rel);
+      }
     } else {
       // 多选移出时复制目标目录（比只复制第一篇笔记的路径更有用）
       try {
@@ -2400,6 +2404,35 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     this.dbg('已关闭标签页', leaves.length);
   }
 
+  /** 找当前打开某个文件的标签页；找不到返回 null */
+  findLeafByFile(predicate) {
+    let found = null;
+    try {
+      if (typeof this.app.workspace.iterateAllLeaves !== 'function') return null;
+      this.app.workspace.iterateAllLeaves((leaf) => {
+        if (found) return;
+        const view = leaf && leaf.view;
+        if (view && view.file && predicate(view.file)) found = leaf;
+      });
+    } catch (e) { this.dbg('查找标签页失败', e.message); }
+    return found;
+  }
+
+  /** 把已有标签页切换到库外文件（移出 Vault 时用，避免关标签造成跳动） */
+  async openExternalInLeaf(leaf, abs) {
+    if (!leaf || typeof leaf.openFile !== 'function' || !abs) return false;
+    try {
+      const unix = String(abs).split(path.sep).join('/');
+      const f = this.app.vault.getFileByPath('file:' + unix);
+      if (!f) return false;
+      await leaf.openFile(f);
+      return true;
+    } catch (e) {
+      this.dbg('标签切换为库外文件失败', e.message);
+      return false;
+    }
+  }
+
   /** 文件列表右键（单选 / 多选）：MD → 库外 MD 目录；附件 → 库外附件目录 */
   async contextMoveOut(fileOrFiles) {
     const targets = vaultMdTargets(fileOrFiles, this.app);
@@ -2441,7 +2474,18 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       paths,
       moveSource: this.settings.contextMenuMoveSource,
       keepAssetSources: keep,
-      beforeRemove: () => this.detachLeaves((view) => matches(view.file)),
+      beforeRemove: async (plans) => {
+        if (!vRoot) return false;
+        let switched = false;
+        for (const p of plans || []) {
+          const leaf = this.findLeafByFile(
+            (f) => !isExternalTFile(f) && path.resolve(vRoot, String(f.path)) === p.src);
+          if (!leaf) continue;
+          const ok = await this.openExternalInLeaf(leaf, p.dest);
+          switched = switched || ok;
+        }
+        return switched;
+      },
       note: notes.join('\n'),
     });
   }
@@ -2472,8 +2516,13 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       paths,
       moveSource: this.settings.contextMenuMoveSource,
       keepAssetSources: keep,
-      beforeRemove: () => this.detachLeaves(
-        (view) => externalAbsFromFile(view.file, this.app) === src),
+      beforeRemove: async (plans) => {
+        const leaf = this.findLeafByFile((f) => externalAbsFromFile(f, this.app) === src);
+        const dest = plans && plans[0] && plans[0].dest;
+        if (!leaf || !dest) return false;
+        const rel = path.relative(vRoot, dest).split(path.sep).join('/');
+        return this.openImportedNote(rel, leaf);
+      },
       note: (this.settings.contextMenuUseDefaultAttachmentFolder
         ? '附件使用库内默认附件文件夹：' + (af.raw ||
           '（未配置，回退 ' + (String(this.settings.vaultAssetFolder || 'assets').trim() || 'assets') + '）')
