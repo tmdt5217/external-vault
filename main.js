@@ -1741,6 +1741,13 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       if (f.kind !== 'md') continue;
       const base = path.basename(f.abs, path.extname(f.abs));
       if (!this._externalNameCache.has(base)) this._externalNameCache.set(base, f.abs);
+      // frontmatter aliases 也参与解析（[[BTC]]、[[加密货币]] 等）
+      for (const a of (f.aliases || [])) {
+        const key = String(a || '').trim();
+        if (key && !this._externalNameCache.has(key)) {
+          this._externalNameCache.set(key, f.abs);
+        }
+      }
     }
     return files.sort((a, b) => b.mtime - a.mtime);
   }
