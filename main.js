@@ -182,6 +182,12 @@ const EN = {
   '创建于': 'Created ',
   '新建笔记': 'New note',
   '打开库外文件': 'Open external file',
+  '文件名 (A-Z)': 'File name (A-Z)',
+  '文件名 (Z-A)': 'File name (Z-A)',
+  '编辑时间 (从新到旧)': 'Modified (newest first)',
+  '编辑时间 (从旧到新)': 'Modified (oldest first)',
+  '创建时间 (从新到旧)': 'Created (newest first)',
+  '创建时间 (从旧到新)': 'Created (oldest first)',
   '打开面板': 'Open panel',
   '打开附件目录': 'Open attachments folder',
   '复制路径': 'Copy path',
@@ -4451,7 +4457,7 @@ class ExternalVaultView extends obsidian.ItemView {
     this.files = [];
     this.query = '';
     this.listEl = null;
-    this.sortBy = 'mtime';
+    this.sortMode = 'mtime-desc';
     this.collapseAll = true; // 默认折叠文件夹，避免大量附件把 MD 挤到下面
   }
 
@@ -4488,10 +4494,7 @@ class ExternalVaultView extends obsidian.ItemView {
       bar.appendChild(b);
     };
     addIcon('lucide-file-plus', tr('新建笔记'), () => this.plugin.guard(() => this.plugin.openNewNoteModal()));
-    addIcon('lucide-arrow-down-up', tr('排序'), () => {
-      this.sortBy = this.sortBy === 'name' ? 'mtime' : 'name';
-      this.renderList();
-    });
+    addIcon('lucide-arrow-down-up', tr('排序'), (e) => this.showSortMenu(e));
     addIcon('lucide-chevrons-up-down', tr('折叠 / 展开'), () => {
       this.collapseAll = !this.collapseAll;
       this.renderList();
@@ -4590,9 +4593,17 @@ class ExternalVaultView extends obsidian.ItemView {
       });
     }
     const files = node.files.slice().sort((a, b) => {
-      if (this.sortBy === 'mtime') return b.mtime - a.mtime;
-      return path.basename(a.abs).localeCompare(path.basename(b.abs),
-        'zh-Hans-CN', { numeric: true, sensitivity: 'base' });
+      const [key, dir] = String(this.sortMode || 'mtime-desc').split('-');
+      let cmp = 0;
+      if (key === 'name') {
+        cmp = path.basename(a.abs).localeCompare(path.basename(b.abs),
+          'zh-Hans-CN', { numeric: true, sensitivity: 'base' });
+      } else if (key === 'ctime') {
+        cmp = (a.ctime || 0) - (b.ctime || 0);
+      } else {
+        cmp = (a.mtime || 0) - (b.mtime || 0);
+      }
+      return dir === 'desc' ? -cmp : cmp;
     });
     for (const f of files) {
       const active = this.activeAbs && path.resolve(f.abs) === this.activeAbs;
@@ -4640,6 +4651,24 @@ class ExternalVaultView extends obsidian.ItemView {
       menu.addItem((i) => i.setTitle(tr('删除库外 MD（含附件）')).setIcon('lucide-trash')
         .onClick(() => this.plugin.guard(() => this.plugin.promptDeleteExternalNote(file))));
     }
+    menu.showAtMouseEvent(evt);
+  }
+
+  showSortMenu(evt) {
+    if (!obsidian.Menu) return;
+    const menu = new obsidian.Menu();
+    const add = (title, mode) => menu.addItem((i) => i
+      .setTitle(title)
+      .setChecked(this.sortMode === mode)
+      .onClick(() => { this.sortMode = mode; this.renderList(); }));
+    add(tr('文件名 (A-Z)'), 'name-asc');
+    add(tr('文件名 (Z-A)'), 'name-desc');
+    menu.addSeparator();
+    add(tr('编辑时间 (从新到旧)'), 'mtime-desc');
+    add(tr('编辑时间 (从旧到新)'), 'mtime-asc');
+    menu.addSeparator();
+    add(tr('创建时间 (从新到旧)'), 'ctime-desc');
+    add(tr('创建时间 (从旧到新)'), 'ctime-asc');
     menu.showAtMouseEvent(evt);
   }
 
