@@ -3366,7 +3366,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
 
   /** 源 MD 被移走前，关掉指向它的标签页 */
   /** 把打开某库外文件的标签重定向到库内文件，保持当前笔记不切换 */
-  retargetLeaves(srcAbs, targetFile) {
+  async retargetLeaves(srcAbs, targetFile) {
     const ws = this.app.workspace;
     const prev = ws.activeLeaf;
     const targets = [];
@@ -3378,9 +3378,9 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       } catch (e) { /* noop */ }
     });
     for (const leaf of targets) {
-      try { leaf.openFile(targetFile, { active: false }); } catch (e) { /* noop */ }
+      try { await leaf.openFile(targetFile, { active: false }); } catch (e) { /* noop */ }
     }
-    // openFile 会激活目标标签；恢复原来的活动标签，避免跳到被移动的笔记
+    // openFile 完成后再恢复原来的活动标签，否则会被异步激活覆盖
     if (prev && targets.indexOf(prev) === -1) {
       try { ws.setActiveLeaf(prev, { focus: true }); } catch (e) { /* noop */ }
     }
@@ -3621,7 +3621,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
           : '';
         let tf = null;
         try { tf = rel ? this.app.vault.getFileByPath(rel) : null; } catch (e) { /* noop */ }
-        if (tf) { this.retargetLeaves(src, tf); continue; }
+        if (tf) { await this.retargetLeaves(src, tf); continue; }
       }
       this.detachLeaves((view) => externalAbsFromFile(view.file, this.app) === src);
     }
