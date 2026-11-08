@@ -130,6 +130,18 @@ span.cm-hmd-internal-link.ev-external-link .cm-underline,
 /* 列表复用 Obsidian 文件浏览器的结构类（nav-files-container / tree-item / nav-file-title），
    行高、缩进、hover、选中态全部由主题决定，和左侧文件列表保持一致 */
 .ev-panel-list { padding: 2px 0; }
+/* 悬停灰框：部分主题只在文件浏览器容器内生效，这里按同样的变量显式补上 */
+.ev-panel .nav-file-title,
+.ev-panel .nav-folder-title {
+  border-radius: var(--radius-s, 6px);
+  padding: 3px 8px;
+  min-height: 24px;
+}
+.ev-panel .nav-file-title:hover,
+.ev-panel .nav-folder-title:hover,
+.ev-panel .tree-item-self:hover {
+  background-color: var(--nav-item-background-hover, var(--background-modifier-hover));
+}
 .ev-panel-empty { padding: 12px 8px; color: var(--text-muted); font-size: var(--font-ui-small); }
 
 /* 库外文件管理器（ExternalFilesModal） */
