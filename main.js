@@ -72,6 +72,16 @@ const path = require('path');
 const os = require('os');
 
 const LOG = '[external-vault]';
+
+/** 超过这个数量的外部库改用轻量索引：只记路径/时间/大小，不读正文 */
+const SCAN_LIGHT_LIMIT = 50000;
+
+/** 让出主线程：大目录扫描时分片执行，避免整段冻结 UI */
+function yieldToUI() {
+  return new Promise((resolve) => {
+    try { window.setTimeout(resolve, 0); } catch (e) { setTimeout(resolve, 0); }
+  });
+}
 const VIEW_TYPE = 'external-vault-panel';
 
 /** 简易模式内置目录，全部相对 vault 根目录（../ = 与库同级） */
@@ -438,12 +448,19 @@ function normalizeFsPath(raw) {
   if (/^file:/i.test(s)) {
     // Obsidian 1.14 把库外文件路径写成 "file:/Users/me/Desktop/a.md"（只有一个斜杠！），
     // 标准写法则是 file:///Users/me/Desktop/a.md。两者都是本机绝对路径，都要还原。
-    // 只有 file://host/share 这种 UNC 路径才拒绝。
-    let rest = s.replace(/^file:/i, '').replace(/^\/+/, '');
-    rest = rest.replace(/^localhost\//i, '');
+    // 不再按「常见顶级目录」白名单过滤：白名单会漏掉 /Network、外接卷子目录等位置，
+    // 导致明明打开了库外文件却识别不出来。这里只拒绝真正的 UNC（file://host/share）。
+    let rest = s.replace(/^file:/i, '');
+    if (/^\/\/[^/]/.test(rest)) {
+      const m = /^\/\/([^/]+)(\/.*)?$/.exec(rest);
+      const host = String((m && m[1]) || '').toLowerCase();
+      if (host !== 'localhost') return null;
+      rest = (m && m[2]) || '/';
+    }
+    if (!/^[\\/]/.test(rest) && !/^[A-Za-z]:[\\/]/.test(rest)) return null;
+    rest = rest.replace(/^[\\/]+/, '');
     const winDrive = /^[A-Za-z]:[\\/]/.test(rest);
-    const localAbs = /^(?:Users|home|Volumes|private|Applications|Library|System|var|usr|tmp|opt|etc|mnt|media|srv|root)\//i.test(rest);
-    if (!winDrive && !localAbs) return null;
+    if (!winDrive && !rest) return null;
     s = winDrive ? rest : '/' + rest;
   }
   try { s = decodeURIComponent(s); } catch (e) { /* 保留原样 */ }
@@ -724,6 +741,16 @@ function formatLinkTarget(rel, style) {
   return /[\s()<>]/.test(rel) ? '<' + rel + '>' : rel;
 }
 
+/** 从任意起点计算指向目标的相对链接（逐段编码，类方法与纯函数共用） */
+function externalLinkBetween(targetAbs, fromAbs) {
+  const fromDir = isMdPath(fromAbs) ? path.dirname(fromAbs) : fromAbs;
+  let rel = path.relative(fromDir, targetAbs).split(path.sep).join('/');
+  if (!rel.startsWith('.')) rel = './' + rel;
+  return rel.split('/').map((seg) => seg
+    .replace(/%/g, '%25').replace(/#/g, '%23')
+    .replace(/\?/g, '%3F').replace(/ /g, '%20')).join('/');
+}
+
 /** 只用于把 v1.2 的绝对路径配置迁移成 v1.3 的相对目录 */
 function normalizeRootDir(raw) {
   return normalizeFsPath(raw);
@@ -798,24 +825,54 @@ function pickDirectory(onPicked, defaultPath) {
   }
 }
 
+/**
+ * 逐块比较两个文件内容是否完全一致。
+ * 只比大小是不安全的：字节数相同但内容不同的两张图会被当成同一份，
+ * 而转移随后会剪切源文件 —— 链接就指向了错的图，原件也已删除。
+ * 用 256 KB 分块读，避免把大附件整个读进内存。
+ */
+function sameFileContent(a, b) {
+  let fa = null;
+  let fb = null;
+  try {
+    const sa = fs.statSync(a);
+    const sb = fs.statSync(b);
+    if (!sa.isFile() || !sb.isFile() || sa.size !== sb.size || sa.size === 0) return false;
+    fa = fs.openSync(a, 'r');
+    fb = fs.openSync(b, 'r');
+    const CHUNK = 256 * 1024;
+    const ba = Buffer.allocUnsafe(CHUNK);
+    const bb = Buffer.allocUnsafe(CHUNK);
+    let pos = 0;
+    while (pos < sa.size) {
+      const want = Math.min(CHUNK, sa.size - pos);
+      const na = fs.readSync(fa, ba, 0, want, pos);
+      const nb = fs.readSync(fb, bb, 0, want, pos);
+      if (na !== want || nb !== want) return false;
+      if (!ba.subarray(0, na).equals(bb.subarray(0, nb))) return false;
+      pos += want;
+    }
+    return true;
+  } catch (e) {
+    return false;
+  } finally {
+    try { if (fa !== null) fs.closeSync(fa); } catch (e) { /* noop */ }
+    try { if (fb !== null) fs.closeSync(fb); } catch (e) { /* noop */ }
+  }
+}
+
 /** 批量分配目标文件名：同时避开磁盘已有文件和本批次内重名 */
 function allocName(dir, name, used, srcAbs) {
   const ext = path.extname(name);
   const stem = path.basename(name, ext);
-  const sameSize = (p) => {
-    try {
-      if (!srcAbs) return false;
-      return fs.statSync(p).size === fs.statSync(srcAbs).size;
-    } catch (e) { return false; }
-  };
   let candidate = name;
   let i = 1;
   while (true) {
     const full = path.join(dir, candidate);
     const taken = used.has(full.toLowerCase());
     if (!taken && !fs.existsSync(full)) break;
-    // 同名且大小相同的附件视为同一份，直接复用，避免产生 -1 副本
-    if (!taken && sameSize(full)) {
+    // 同名且内容完全一致才复用：避免 -1 副本，也避免把不同文件当成同一份
+    if (!taken && srcAbs && sameFileContent(full, srcAbs)) {
       used.add(full.toLowerCase());
       return full;
     }
@@ -971,6 +1028,95 @@ function findTrashItem(srcPath) {
 /** 正则转义 */
 function escapeRegExp(s) {
   return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * 找出「代码区」范围：围栏代码块（三个反引号 / 三个波浪号，允许缩进）与行内代码。
+ * 链接改写必须绕开这些区域，否则代码示例里的 [[链接]] / [x](y) 会被改坏。
+ * 返回 [start, end) 区间数组；未闭合的围栏保护到文本末尾。
+ */
+function codeRanges(text) {
+  const s = String(text == null ? '' : text);
+  const ranges = [];
+  let fence = null;
+  let offset = 0;
+  for (const line of s.split('\n')) {
+    const lineStart = offset;
+    const lineEnd = offset + line.length;
+    offset = lineEnd + 1;
+    if (fence) {
+      const close = new RegExp('^[ \\t]*' + fence.marker + '{' + fence.len + ',}[ \\t]*$');
+      if (close.test(line)) {
+        ranges.push([fence.start, lineEnd]);
+        fence = null;
+      }
+      continue;
+    }
+    const open = /^[ \t]*(`{3,}|~{3,})/.exec(line);
+    if (open) {
+      fence = { marker: open[1][0] === '`' ? '`' : '~', len: open[1].length, start: lineStart };
+      continue;
+    }
+    const inline = /(`+)[^`]*?\1/g;
+    let mm;
+    while ((mm = inline.exec(line)) !== null) {
+      ranges.push([lineStart + mm.index, lineStart + mm.index + mm[0].length]);
+    }
+  }
+  if (fence) ranges.push([fence.start, s.length]);
+  return ranges;
+}
+
+/** 只在代码区之外执行 transform，代码区原样保留 */
+function mapOutsideCode(text, transform) {
+  const s = String(text == null ? '' : text);
+  const ranges = codeRanges(s).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  let out = '';
+  let pos = 0;
+  for (const [a, b] of ranges) {
+    if (b <= pos) continue;
+    const start = Math.max(a, pos);
+    if (start > pos) out += transform(s.slice(pos, start));
+    out += s.slice(start, b);
+    pos = b;
+  }
+  out += transform(s.slice(pos));
+  return out;
+}
+
+/** 库内 [[笔记#小节|别名]] → [别名](库外相对路径#小节)，保留小节锚点 */
+function rewriteWikiLinksToExternal(chunk, name, destAbs, referrerAbs) {
+  const re = new RegExp('\\[\\[' + escapeRegExp(name) + '(#[^\\]|]*)?(?:\\|([^\\]]*))?\\]\\]', 'g');
+  return String(chunk).replace(re, (m, hash, alias) => {
+    try {
+      const rel = externalLinkBetween(destAbs, referrerAbs);
+      return '[' + (alias || name) + '](' + rel + (hash || '') + ')';
+    } catch (e) { return m; }
+  });
+}
+
+/**
+ * 指向库外笔记的 markdown 链接 → [[笔记#小节|别名]]。
+ * 只处理相对路径的 .md / .markdown 链接：http(s): / file: / obsidian: 等带 scheme 的，
+ * 以及 .pdf / .png 这类同名附件链接一律不动
+ * （旧实现只按 basename 匹配，会把它们误转成双链，锚点也会丢）。
+ */
+function rewriteMdLinksToWiki(chunk, name) {
+  return String(chunk).replace(/\[([^\]]*)\]\(((?:[^()\n]|\([^()\n]*\))+)\)/g, (m, text, href) => {
+    const raw = String(href || '').trim().replace(/^<|>$/g, '');
+    if (!raw || /^[a-z][a-z0-9+.-]*:/i.test(raw)) return m;
+    const hashAt = raw.indexOf('#');
+    const rawPath = hashAt >= 0 ? raw.slice(0, hashAt) : raw;
+    const rawHash = hashAt >= 0 ? raw.slice(hashAt) : '';
+    let pathPart = rawPath;
+    let hash = rawHash;
+    try { pathPart = decodeURIComponent(rawPath); } catch (e) { /* 保留原样 */ }
+    try { hash = decodeURIComponent(rawHash); } catch (e) { /* 保留原样 */ }
+    if (!/\.(md|markdown)$/i.test(pathPart)) return m;
+    if (path.basename(pathPart, path.extname(pathPart)) !== name) return m;
+    const label = text && text !== name ? '|' + text : '';
+    return '[[' + name + hash + label + ']]';
+  });
 }
 
 /** 从正文提取链接目标名（wiki / markdown 两种），用于反向索引 */
@@ -1332,6 +1478,20 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       name: tr('库外文件：诊断当前库外文件'),
       callback: () => { this.diagnose().catch((err) => this.reportError(err)); },
     });
+
+    // 增量维护「谁引用了谁」：改动一篇只重算这一篇，不再整库重建
+    try {
+      const mc = this.app.metadataCache;
+      if (mc && typeof mc.on === 'function') {
+        this.registerEvent(mc.on('changed', (f) => this.onVaultFileChanged(f)));
+        this.registerEvent(mc.on('create', (f) => this.onVaultFileChanged(f)));
+        this.registerEvent(mc.on('delete', (f) => this.dropVaultFileRefs(f)));
+        this.registerEvent(mc.on('rename', (f, oldPath) => {
+          this.dropVaultFileRefs({ path: oldPath });
+          this.onVaultFileChanged(f);
+        }));
+      }
+    } catch (e) { /* noop */ }
 
     this.patchOpenLinkText();
     this.patchFirstLinkpathDest();
@@ -1719,9 +1879,21 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     if (!mdDir) return [];
     const idx = await this.loadExternalIndex();
     if (idx && idx.root === mdDir && Array.isArray(idx.files) && idx.files.length) {
-      this.hydrateExternalCaches(idx.files);
-      this.scheduleIndexRefresh();
-      return idx.files.slice().sort((a, b) => b.mtime - a.mtime);
+      // 20 万条时 hydrate 一次就是几十万次 Map 写入，同一份索引只做一次
+      if (this._hydratedFor !== idx.files) {
+        this.hydrateExternalCaches(idx.files);
+        this._hydratedFor = idx.files;
+      }
+      // 全量扫描只由 fs.watch 兜底或首次建库触发，平时走增量
+      if (this._indexStale) { this._indexStale = false; this.scheduleIndexRefresh(); }
+      if (!this._sortedCache || this._sortedCache.src !== idx.files ||
+        this._sortedCache.len !== idx.files.length) {
+        this._sortedCache = {
+          src: idx.files, len: idx.files.length,
+          list: idx.files.slice().sort((a, b) => b.mtime - a.mtime),
+        };
+      }
+      return this._sortedCache.list.slice();
     }
     const started = Date.now();
     let notice = null;
@@ -1750,41 +1922,293 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
 
   async loadExternalIndex() {
     const p = this.externalIndexPath();
-    if (!p || !fs.existsSync(p)) return null;
+    if (!p) return null;
+    let st = null;
+    try { st = fs.statSync(p); } catch (e) { return null; }
+    // 20 万条索引约 50 MB JSON：只在文件真的变了才重新 parse
+    const cache = this._indexCache;
+    if (cache && cache.path === p && cache.mtime === st.mtimeMs && cache.size === st.size) {
+      return cache.data;
+    }
     try {
-      const data = JSON.parse(await fs.promises.readFile(p, 'utf8'));
-      return data && Array.isArray(data.files) ? data : null;
+      const raw = await fs.promises.readFile(p, 'utf8');
+      const data = JSON.parse(raw);
+      const ok = data && Array.isArray(data.files) ? data : null;
+      this._indexCache = { path: p, mtime: st.mtimeMs, size: st.size, data: ok };
+      this._indexByAbs = null;
+      return ok;
     } catch (e) { return null; }
   }
 
   async saveExternalIndex(files, root) {
     const p = this.externalIndexPath();
     if (!p) return;
+    const payload = { version: 1, root, built: Date.now(), files };
+    this._indexCache = null;
+    this._indexByAbs = null;
     try {
       await fs.promises.mkdir(path.dirname(p), { recursive: true });
-      await fs.promises.writeFile(p, JSON.stringify({
-        version: 1, root, built: Date.now(), files,
-      }), 'utf8');
+      await fs.promises.writeFile(p, JSON.stringify(payload), 'utf8');
+      try {
+        const st = fs.statSync(p);
+        this._indexCache = { path: p, mtime: st.mtimeMs, size: st.size, data: payload };
+      } catch (e) { /* noop */ }
     } catch (e) { /* noop */ }
   }
 
-  /** 移动/删除后立刻从索引里去掉已消失的源文件，保证面板与磁盘一致 */
+  /** 移动/删除后立刻从内存索引里去掉已消失的源文件，落盘防抖（20 万条重写一次很贵） */
   updateIndexAfterMove(records) {
-    const p = this.externalIndexPath();
-    if (!p || !fs.existsSync(p)) return;
-    try {
-      const idx = JSON.parse(fs.readFileSync(p, 'utf8'));
-      const gone = new Set((records || []).map((r) => path.resolve(r.src)));
-      idx.files = (idx.files || []).filter((f) => !gone.has(path.resolve(f.abs)));
-      fs.writeFileSync(p, JSON.stringify(idx), 'utf8');
-      if (this._externalNameCache) {
-        for (const f of (idx.files || [])) {
-          if (f.kind !== 'md') continue;
+    const idx = this._indexCache && this._indexCache.data;
+    if (!idx || !Array.isArray(idx.files)) return;
+    const gone = new Set((records || []).map((r) => path.resolve(r.src)));
+    if (!gone.size) return;
+    idx.files = idx.files.filter((f) => !gone.has(path.resolve(f.abs)));
+    if (this._indexSaveTimer) { try { clearTimeout(this._indexSaveTimer); } catch (e) { /* noop */ } }
+    this._indexSaveTimer = window.setTimeout(() => {
+      this._indexSaveTimer = null;
+      this.saveExternalIndex(idx.files, idx.root).catch(() => {});
+    }, 800);
+  }
+  /** 外部目录有文件变化：按文件名做增量更新，不再整库重扫 */
+  async onExternalFsEvent(rel) {
+    const idx = this._indexCache && this._indexCache.data;
+    if (!idx || !Array.isArray(idx.files) || !rel) return;
+    if (!this._extFsPending) this._extFsPending = new Set();
+    this._extFsPending.add(String(rel));
+    if (this._extFsTimer) return;
+    this._extFsTimer = window.setTimeout(() => {
+      this._extFsTimer = null;
+      const list = Array.from(this._extFsPending);
+      this._extFsPending.clear();
+      this.applyExternalFsChanges(list).catch(() => {});
+    }, 350);
+  }
+
+  /** fs.watch 拿不到文件名时，标记索引过期，交给防抖全量扫描兜底 */
+  markIndexStale() {
+    this._indexStale = true;
+    this.scheduleIndexRefresh();
+  }
+
+  async applyExternalFsChanges(rels) {
+    const idx = this._indexCache && this._indexCache.data;
+    const mdDir = this.externalMdDir();
+    if (!idx || !Array.isArray(idx.files) || !mdDir) return;
+    // 20 万条 Map 建一次就够：编辑一篇不必重建全表
+    if (!this._indexByAbs || this._indexByAbs.src !== idx.files) {
+      const m = new Map();
+      for (const f of idx.files) m.set(path.resolve(f.abs), f);
+      this._indexByAbs = { src: idx.files, map: m };
+    }
+    const byAbs = this._indexByAbs.map;
+    const light = idx.files.length > SCAN_LIGHT_LIMIT;
+    let touched = false;
+    for (const raw of rels) {
+      const rel = String(raw || '').replace(/\\/g, '/');
+      if (!rel || rel.startsWith('.')) continue;
+      const abs = path.resolve(mdDir, rel);
+      let st = null;
+      try { st = fs.statSync(abs); } catch (e) { st = null; }
+      const cur = byAbs.get(abs);
+      if (!st || !st.isFile()) {
+        if (cur) { byAbs.delete(abs); touched = true; }
+        continue;
+      }
+      if (cur && cur.mtime === st.mtimeMs && cur.size === st.size) continue;
+      const isMd = isMdPath(abs);
+      let entry = cur;
+      if (!entry) {
+        const insideMd = abs.startsWith(path.resolve(mdDir) + path.sep);
+        const ext = path.extname(abs).slice(1).toLowerCase();
+        entry = {
+          abs,
+          rel: insideMd ? path.relative(mdDir, abs).split(path.sep).join('/')
+            : 'attachments/' + path.basename(abs),
+          kind: isMd ? 'md' : (ext === 'pdf' ? 'pdf' : (isImageFile({ name: abs }) ? 'image' : 'file')),
+          mtime: 0,
+          ctime: 0,
+          size: 0,
+          assets: 0,
+          aliases: [],
+          links: [],
+        };
+      }
+      entry.mtime = st.mtimeMs;
+      entry.size = st.size;
+      entry.ctime = st.birthtimeMs || entry.ctime || 0;
+      if (isMd && !light) {
+        try {
+          const text = await fs.promises.readFile(abs, 'utf8');
+          entry.aliases = parseFrontmatterAliases(text);
+          entry.links = extractLinkNames(text);
+          let n = 0;
+          for (const it of collectLocalAssets(text, abs, null)) {
+            if (isInsideVault(it.abs, this.app) || !fs.existsSync(it.abs)) continue;
+            n += 1;
+          }
+          entry.assets = n;
+        } catch (e) { /* 读不到就保持原值，下轮再说 */ }
+      }
+      if (!cur) { idx.files.push(entry); byAbs.set(abs, entry); }
+      touched = true;
+    }
+    if (!touched) return;
+    this._sortedCache = null;
+    if (this._externalNameCache) {
+      for (const raw of rels) {
+        const abs = path.resolve(mdDir, String(raw || '').replace(/\\/g, '/'));
+        const entry = byAbs.get(abs);
+        if (!entry || entry.kind !== 'md') continue;
+        const base = path.basename(abs, path.extname(abs));
+        if (!this._externalNameCache.has(base)) this._externalNameCache.set(base, abs);
+        for (const a of entry.aliases || []) {
+          const k = String(a || '').trim();
+          if (k && !this._externalNameCache.has(k)) this._externalNameCache.set(k, abs);
         }
       }
-    } catch (e) { /* noop */ }
+    }
+    if (this._indexSaveTimer) { try { clearTimeout(this._indexSaveTimer); } catch (e) { /* noop */ } }
+    this._indexSaveTimer = window.setTimeout(() => {
+      this._indexSaveTimer = null;
+      this.saveExternalIndex(idx.files, idx.root).catch(() => {});
+    }, 5000);
+    // 面板刷新也防抖：避免边打字边重建列表
+    if (this._panelRefreshTimer) { try { clearTimeout(this._panelRefreshTimer); } catch (e) { /* noop */ } }
+    this._panelRefreshTimer = window.setTimeout(() => {
+      this._panelRefreshTimer = null;
+      this.refreshExternalPanels();
+    }, 1500);
+  }
+  /** 库内链接反向索引：词条名 → Set<库内绝对路径>，数据来自 metadataCache，不读盘 */
+  async ensureVaultRefIndex() {
+    const mc = this.app.metadataCache;
+    const vault = this.app.vault;
+    const vRoot = vaultRoot(this.app);
+    if (!mc || typeof mc.getFileCache !== 'function' || !vault ||
+      typeof vault.getMarkdownFiles !== 'function' || !vRoot) {
+      this._vaultRefIndex = null;
+      return false;
+    }
+    if (this._vaultRefIndex && !this._vaultRefDirty) {
+      // 事件可能漏（同步盘写入、异常退出）：文件数不一致就重建，避免静默漏改
+      let n = -1;
+      try { n = vault.getMarkdownFiles().length; } catch (e) { n = -1; }
+      if (n === this._vaultRefCount) return true;
+      this._vaultRefDirty = true;
+    }
+    this._vaultRefIndex = new Map();
+    this._vaultRefByFile = new Map();
+    this._vaultRefDirty = false;
+    let i = 0;
+    for (const f of vault.getMarkdownFiles()) {
+      i += 1;
+      if (i % 500 === 0) await yieldToUI();
+      this.indexVaultFileInto(f, path.resolve(vRoot, f.path));
+    }
+    try { this._vaultRefCount = vault.getMarkdownFiles().length; } catch (e) { this._vaultRefCount = -1; }
+    return true;
   }
 
+  /** 把单个库内文件的出链写进反向索引（会先清掉它上次的旧条目） */
+  indexVaultFileInto(file, abs) {
+    if (!this._vaultRefIndex || !file || !abs) return;
+    const mc = this.app.metadataCache;
+    let cache = null;
+    try { cache = mc && mc.getFileCache ? mc.getFileCache(file) : null; } catch (e) { cache = null; }
+    const keys = new Set();
+    const refs = [].concat((cache && cache.links) || [], (cache && cache.embeds) || []);
+    for (const l of refs) {
+      const raw = String((l && l.link) || '').trim().replace(/\\/g, '/');
+      if (!raw) continue;
+      // 只按文件名索引：库外文件不在 vault 索引里，链接常写成 ../External Vault/名字.md
+      const base = path.basename(raw, path.extname(raw)).trim();
+      if (base) keys.add(base);
+    }
+    const old = this._vaultRefByFile.get(abs);
+    if (old) {
+      for (const k of old) {
+        const set = this._vaultRefIndex.get(k);
+        if (!set) continue;
+        set.delete(abs);
+        if (!set.size) this._vaultRefIndex.delete(k);
+      }
+    }
+    if (!keys.size) { this._vaultRefByFile.delete(abs); return; }
+    for (const k of keys) {
+      if (!this._vaultRefIndex.has(k)) this._vaultRefIndex.set(k, new Set());
+      this._vaultRefIndex.get(k).add(abs);
+    }
+    this._vaultRefByFile.set(abs, keys);
+  }
+
+  onVaultFileChanged(file) {
+    if (!this._vaultRefIndex) return;
+    const vRoot = vaultRoot(this.app);
+    if (!vRoot || !file || !file.path) return;
+    this.indexVaultFileInto(file, path.resolve(vRoot, String(file.path)));
+  }
+
+  dropVaultFileRefs(file) {
+    if (!this._vaultRefIndex || !file || !file.path) return;
+    const vRoot = vaultRoot(this.app);
+    if (!vRoot) return;
+    const abs = path.resolve(vRoot, String(file.path));
+    const old = this._vaultRefByFile.get(abs);
+    if (!old) return;
+    for (const k of old) {
+      const set = this._vaultRefIndex.get(k);
+      if (!set) continue;
+      set.delete(abs);
+      if (!set.size) this._vaultRefIndex.delete(k);
+    }
+    this._vaultRefByFile.delete(abs);
+  }
+
+  /**
+   * 找出「可能引用了这些名字」的文件。
+   * 库内走 metadataCache 反向索引（几十万篇也只返回命中的几篇），库外走索引里的 links。
+   */
+  async referrerTargets(byName) {
+    const vRoot = vaultRoot(this.app);
+    const out = [];
+    const seen = new Set();
+    const push = (abs, file) => {
+      if (!abs) return;
+      const key = path.resolve(abs);
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push({ abs: key, file: file || null });
+    };
+    const ok = await this.ensureVaultRefIndex();
+    if (ok && vRoot) {
+      for (const name of byName.keys()) {
+        for (const abs of this._vaultRefIndex.get(name) || []) {
+          let f = null;
+          try {
+            f = this.app.vault.getAbstractFileByPath(
+              path.relative(vRoot, abs).split(path.sep).join('/'));
+          } catch (e) { /* noop */ }
+          push(abs, f);
+        }
+      }
+    } else {
+      // 拿不到 metadataCache（例如异常环境）才退回全库扫描
+      for (const f of this.app.vault.getMarkdownFiles()) {
+        push(vRoot ? path.resolve(vRoot, f.path) : f.path, f);
+      }
+    }
+    for (const name of byName.keys()) {
+      for (const abs of (this._refIndex && this._refIndex.get(name)) || []) push(abs, null);
+    }
+    // 旧版索引没有 links 字段时 _refIndex 为空，退回全量扫描，避免漏改
+    if (!this._refIndex) {
+      try {
+        const entries = await this.listExternalEntries();
+        for (const e of entries) if (e.kind === 'md') push(e.abs, null);
+      } catch (e) { /* noop */ }
+    }
+    return out;
+  }
   /** 用文件列表填充文件名 / 别名缓存 */
   hydrateExternalCaches(files) {
     if (!this._externalNameCache) this._externalNameCache = new Map();
@@ -1835,32 +2259,42 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     const seen = new Set();
     let mdList = [];
     try { mdList = await listMarkdownFiles(mdDir, true, 8); } catch (e) { mdList = []; }
+    // 5 万篇以上不再逐篇读正文：200k × 30KB ≈ 6GB，主线程会卡死。
+    // 轻量模式只索引路径/时间/大小（assets=-1 表示未知），保证浏览、搜索、打开、移动可用。
+    const light = mdList.length > SCAN_LIGHT_LIMIT;
+    if (light) this.dbg('外部库 ' + mdList.length + ' 篇，使用轻量索引（不读正文）');
     for (const abs of mdList) {
       done += 1;
-      if (onProgress && done % 200 === 0) {
-        try { onProgress(done, mdList.length); } catch (e) { /* noop */ }
+      if (done % 250 === 0) {
+        if (onProgress) { try { onProgress(done, mdList.length); } catch (e) { /* noop */ } }
+        await yieldToUI();
       }
       let st = null;
       try { st = fs.statSync(abs); } catch (e) { /* noop */ }
-      let assets = 0;
-      try {
-        assets = this.assetPathsIn(abs)
-          .filter((a) => !isInsideVault(a, this.app) && fs.existsSync(a)).length;
-      } catch (e) { /* noop */ }
-      const prev = prevMap.get(path.resolve(abs));
+      const key = path.resolve(abs);
+      const prev = prevMap.get(key);
       const mtime = st ? st.mtimeMs : 0;
       const size = st ? st.size : 0;
+      const changed = !prev || prev.mtime !== mtime || prev.size !== size;
+      // 未改动就直接复用上次结果，绝不重复读盘
+      let assets = prev && typeof prev.assets === 'number' ? prev.assets : -1;
       let aliases = prev ? (prev.aliases || []) : [];
       let links = prev ? (prev.links || []) : [];
-      // 只有新文件或 mtime/size 变化时才重新读正文
-      if (!prev || prev.mtime !== mtime || prev.size !== size) {
+      if (changed && !light) {
         try {
           const text = await fs.promises.readFile(abs, 'utf8');
           aliases = parseFrontmatterAliases(text);
           links = extractLinkNames(text);
-        } catch (e) { /* noop */ }
+          assets = 0;
+          for (const it of collectLocalAssets(text, abs, null)) {
+            if (isInsideVault(it.abs, this.app) || !fs.existsSync(it.abs)) continue;
+            assets += 1;
+          }
+        } catch (e) {
+          assets = -1;
+        }
       }
-      seen.add(path.resolve(abs));
+      seen.add(key);
       files.push({
         abs,
         rel: path.relative(mdDir, abs).split(path.sep).join('/'),
@@ -1868,11 +2302,12 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
         ctime: st ? st.birthtimeMs : 0,
         size,
         assets,
-        aliases,
-        links,
+        aliases: light ? undefined : aliases,
+        links: light ? undefined : links,
         kind: 'md',
       });
     }
+    let walked = 0;
     const walk = async (dir, base, prefix) => {
       let entries = [];
       try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); }
@@ -1882,6 +2317,8 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
         const p = path.join(dir, en.name);
         if (en.isDirectory()) { await walk(p, base, prefix); continue; }
         if (!en.isFile() || isMdPath(en.name)) continue;
+        walked += 1;
+        if (walked % 500 === 0) await yieldToUI();
         const rp = path.resolve(p);
         if (seen.has(rp)) continue;
         seen.add(rp);
@@ -1911,8 +2348,11 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       await walk(mdDir, mdDir, '');
     }
     if (!this._externalNameCache) this._externalNameCache = new Map();
+    let named = 0;
     for (const f of files) {
       if (f.kind !== 'md') continue;
+      named += 1;
+      if (named % 2000 === 0) await yieldToUI();
       const base = path.basename(f.abs, path.extname(f.abs));
       if (!this._externalNameCache.has(base)) this._externalNameCache.set(base, f.abs);
       // frontmatter aliases 也参与解析（[[BTC]]、[[加密货币]] 等）
@@ -1925,7 +2365,6 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     }
     return files.sort((a, b) => b.mtime - a.mtime);
   }
-
   /** 按 mtime 缓存库外 MD 正文，供搜索使用 */
   async ensureExternalContents(entries) {
     if (!this._contentCache) this._contentCache = new Map();
@@ -2107,12 +2546,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     const oldBase = path.basename(oldAbs, path.extname(oldAbs));
     const newBase = path.basename(newAbs, path.extname(newAbs));
     const vRoot = vaultRoot(this.app);
-    const targets = [];
-    for (const f of this.app.vault.getMarkdownFiles()) targets.push({ abs: path.resolve(vRoot, f.path), file: f });
-    try {
-      const entries = await this.listExternalEntries();
-      for (const e of entries) if (e.kind === 'md') targets.push({ abs: e.abs, file: null });
-    } catch (e) { /* noop */ }
+    const targets = await this.referrerTargets(new Map([[oldBase, { src: oldAbs, dest: newAbs }]]));
     const wikiRe = new RegExp('\\[\\[' + escapeRegExp(oldBase) + '(#[^\\]|]*)?(?:\\|([^\\]]*))?\\]\\]', 'g');
     let changed = 0;
     for (const t of targets) {
@@ -2139,10 +2573,6 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
           changed += 1;
         } catch (e) { /* noop */ }
       }
-    };
-    // 分批并发读，避免几千个文件串行等待
-    for (let i = 0; i < targets.length; i += 16) {
-      await Promise.all(targets.slice(i, i + 16).map(rewriteOne));
     }
     return changed;
   }
@@ -2171,23 +2601,8 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       byName.set(path.basename(r.src, path.extname(r.src)), r);
     }
     let changed = 0;
-    const targets = [];
-    for (const f of this.app.vault.getMarkdownFiles()) {
-      targets.push({ abs: path.resolve(vRoot, f.path), file: f });
-    }
-    // 库外：用反向索引只挑引用了目标名的笔记，避免扫 10 万个文件
-    const extRefs = new Set();
-    for (const name of byName.keys()) {
-      for (const abs of (this._refIndex && this._refIndex.get(name)) || []) extRefs.add(abs);
-    }
-    for (const abs of extRefs) targets.push({ abs, file: null });
-    // 旧版索引没有 links 字段时 _refIndex 为空，退回全量扫描，避免漏改
-    if (!extRefs.size && !this._refIndex) {
-      try {
-        const entries = await this.listExternalEntries();
-        for (const e of entries) if (e.kind === 'md') targets.push({ abs: e.abs, file: null });
-      } catch (e) { /* noop */ }
-    }
+    // 只定位真正提到这些名字的文件：30 万篇的库不再逐篇读盘
+    const targets = await this.referrerTargets(byName);
     this.dbg('引用扫描：' + targets.length + ' 个文件，目标 ' +
       records.map((r) => path.basename(r.src)).join('、'));
     const rewriteOne = async (t) => {
@@ -2210,25 +2625,10 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       const referrerAbs = t.abs;
       for (const [name, r] of byName) {
         if (this.isInsideExternalVault(r.dest)) {
-          const re = new RegExp('\\[\\[' + escapeRegExp(name) +
-            '(#[^\\]|]*)?(?:\\|([^\\]]*))?\\]\\]', 'g');
-          next = next.replace(re, (m, hash, alias) => {
-            try {
-              const rel = this.externalLinkFromAbs(r.dest, referrerAbs);
-              return '[' + (alias || name) + '](' + rel + ')';
-            } catch (e) { return m; }
-          });
+          next = mapOutsideCode(next,
+            (chunk) => rewriteWikiLinksToExternal(chunk, name, r.dest, referrerAbs));
         } else {
-          next = next.replace(/\[([^\]]*)\]\(((?:[^()\n]|\([^()\n]*\))+)\)/g, (m, text, href) => {
-            try {
-              const decoded = decodeURIComponent(href.replace(/^<|>$/g, ''));
-              // 按文件名匹配，不依赖相对路径从哪一层算起
-              const base = path.basename(decoded, path.extname(decoded));
-              if (base !== name) return m;
-              const label = text && text !== name ? '|' + text : '';
-              return '[[' + name + label + ']]';
-            } catch (e) { return m; }
-          });
+          next = mapOutsideCode(next, (chunk) => rewriteMdLinksToWiki(chunk, name));
         }
       }
       if (next !== content) {
@@ -2263,6 +2663,10 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
           changed += 1;
         } catch (e) { /* noop */ }
       }
+    }
+    // 分批并发读，避免几千个文件串行等待（rewriteOne 在本函数内定义）
+    for (let i = 0; i < targets.length; i += 16) {
+      await Promise.all(targets.slice(i, i + 16).map(rewriteOne));
     }
     return changed;
   }
@@ -2470,12 +2874,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
 
   /** 从任意起点文件计算指向目标的相对链接（编码规则同 externalLinkFor） */
   externalLinkFromAbs(targetAbs, fromAbs) {
-    const fromDir = isMdPath(fromAbs) ? path.dirname(fromAbs) : fromAbs;
-    let rel = path.relative(fromDir, targetAbs).split(path.sep).join('/');
-    if (!rel.startsWith('.')) rel = './' + rel;
-    return rel.split('/').map((seg) => seg
-      .replace(/%/g, '%25').replace(/#/g, '%23')
-      .replace(/\?/g, '%3F').replace(/ /g, '%20')).join('/');
+    return externalLinkBetween(targetAbs, fromAbs);
   }
 
   /** 命令：在当前库内笔记光标处插入指向库外 MD 的相对链接 */
@@ -4294,7 +4693,8 @@ class ExternalFilesModal extends obsidian.Modal {
       }
       const meta = row.createDiv({ cls: 'ev-files-meta' });
       meta.textContent = f.kind === 'md'
-        ? ((f.assets ? f.assets + tr(' 个附件') : tr('无附件')) +
+        ? ((f.assets > 0 ? f.assets + tr(' 个附件')
+          : (f.assets === 0 ? tr('无附件') : '—')) +
           (f.mtime ? ' · ' + new Date(f.mtime).toLocaleString() : ''))
         : (formatBytes(f.size) +
           (f.mtime ? ' · ' + new Date(f.mtime).toLocaleString() : ''));
@@ -4740,7 +5140,10 @@ class ExternalFileImageSettingTab extends obsidian.PluginSettingTab {
 
     new obsidian.Setting(el)
       .setName(tr('剪切时移入系统废纸篓'))
-      .setDesc(tr('默认开 = 源文件移入系统废纸篓，可找回；关闭则直接从磁盘删除。对右键菜单和命令面板同时生效'))
+      .setDesc(tr('默认开 = 源文件移入系统废纸篓，可找回；关闭则直接从磁盘删除。对右键菜单和命令面板同时生效') +
+        (this.plugin.settings.cutUseTrash
+          ? ''
+          : tr('　⚠ 当前已关闭：剪切 = 永久删除（不进废纸篓），无法撤销，建议保持开启')))
       .addToggle((t) => t.setValue(this.plugin.settings.cutUseTrash)
         .onChange((v) => save('cutUseTrash', v)));
 
@@ -5040,11 +5443,19 @@ class ExternalVaultView extends obsidian.ItemView {
     window.setTimeout(() => {
       try { this.buildHeaderActions(); } catch (e) { /* noop */ }
     }, 80);
+    // 本次会话首次打开面板：全量校准一次，补上 Obsidian 关闭期间的增删改
+    if (!this.plugin._bootScanDone) {
+      this.plugin._bootScanDone = true;
+      this.plugin.markIndexStale();
+    }
     // 外部目录变化时防抖刷新，减少高频全量扫描
     const watchDir = this.plugin.externalMdDir();
     if (watchDir && fs.existsSync(watchDir)) {
       try {
-        this._watcher = fs.watch(watchDir, { recursive: true }, () => {
+        this._watcher = fs.watch(watchDir, { recursive: true }, (evt, name) => {
+          if (name) { this.plugin.onExternalFsEvent(String(name)); return; }
+          // 个别平台/递归事件拿不到文件名：退回全量增量扫描兜底
+          this.plugin.markIndexStale();
           window.clearTimeout(this._watchTimer);
           this._watchTimer = window.setTimeout(() => {
             this.refresh().catch(() => {});
@@ -5053,6 +5464,9 @@ class ExternalVaultView extends obsidian.ItemView {
       } catch (e) { /* noop */ }
     }
     this.registerEvent(this.app.workspace.on('file-open', () => {
+      const now = Date.now();
+      if (now - (this._lastRefresh || 0) < 1500) return;
+      this._lastRefresh = now;
       this.refresh().catch(() => {});
     }));
     this.registerInterval(window.setInterval(() => {
@@ -5106,11 +5520,18 @@ class ExternalVaultView extends obsidian.ItemView {
       type: 'search', placeholder: tr('搜索'),
     });
     search.value = this.query;
+    let searchTimer = 0;
     search.addEventListener('input', () => {
       this.query = search.value;
-      this.plugin.ensureExternalContents(this.files)
-        .then(() => this.renderList())
-        .catch(() => this.renderList());
+      if (searchTimer) window.clearTimeout(searchTimer);
+      searchTimer = window.setTimeout(() => {
+        searchTimer = 0;
+        // 超大库只按文件名/路径/别名过滤，不逐篇读正文
+        if (this.files.length > 3000) { this.renderList(); return; }
+        this.plugin.ensureExternalContents(this.files)
+          .then(() => this.renderList())
+          .catch(() => this.renderList());
+      }, 150);
     });
     this.listEl = el.createDiv({ cls: 'ev-panel-list nav-files-container' });
     this.renderList();
