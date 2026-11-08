@@ -177,6 +177,13 @@ span.cm-hmd-internal-link.ev-external-link .cm-underline,
 /* 列表复用 Obsidian 文件浏览器的结构类（nav-files-container / tree-item / nav-file-title），
    行高、缩进、hover、选中态全部由主题决定，和左侧文件列表保持一致 */
 .ev-panel-list { padding: 2px 0; }
+.ev-more {
+  padding: 6px 10px;
+  font-size: 0.85em;
+  color: var(--text-muted);
+  border-left: 2px solid var(--background-modifier-border);
+  margin: 2px 0 4px;
+}
 /* 指向库外文件的链接统一红色（编辑器和阅读视图都生效） */
 .ev-external-link,
 .cm-hmd-internal-link.ev-external-link,

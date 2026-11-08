@@ -2193,34 +2193,12 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     return this._externalNameCache.get(key) || null;
   }
 
-  /** 同步扫描外部库，按文件名或 frontmatter 别名匹配（缓存未就绪时兜底） */
+  /**
+   * 10 万级外部库不能同步扫盘：只查内存缓存。
+   * 缓存由面板预热、文件监听和移动操作增量维护。
+   */
   resolveExternalByAliasSync(name) {
-    const key = String(name || '').replace(/\.md$/i, '').trim();
-    const mdDir = this.externalMdDir();
-    if (!key || !mdDir || !fs.existsSync(mdDir)) return null;
-    let visited = 0;
-    const walk = (dir, depth) => {
-      let entries = [];
-      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return null; }
-      for (const en of entries) {
-        if (en.name.startsWith('.')) continue;
-        visited += 1;
-        if (visited > 400) return null; // 文件太多时不再同步扫，交给缓存/面板预热
-        const p = path.join(dir, en.name);
-        if (en.isDirectory()) {
-          if (depth < 3) { const r = walk(p, depth + 1); if (r) return r; }
-          continue;
-        }
-        if (!en.isFile() || !isMdPath(en.name)) continue;
-        if (path.basename(en.name, path.extname(en.name)) === key) return p;
-        try {
-          const head = fs.readFileSync(p, 'utf8').slice(0, 3000);
-          if (parseFrontmatterAliases(head).includes(key)) return p;
-        } catch (e) { /* noop */ }
-      }
-      return null;
-    };
-    return walk(mdDir, 0);
+    return this.findExternalByName(name);
   }
 
   externalTargetForLink(linktext, sourcePath) {
@@ -5080,6 +5058,15 @@ class ExternalVaultView extends obsidian.ItemView {
       }
       return dir === 'desc' ? -cmp : cmp;
     });
+    // 10 万级目录不能一次性建 DOM：每层最多渲染 300 项，其余靠搜索定位
+    const PAGE = 300;
+    if (files.length > PAGE) {
+      container.createDiv({
+        cls: 'ev-more',
+        text: '共 ' + files.length + ' 项，仅显示前 ' + PAGE + ' 项；用搜索框定位其余文件',
+      });
+      files.length = PAGE;
+    }
     for (const f of files) {
       const active = this.activeAbs && path.resolve(f.abs) === this.activeAbs;
       const fileEl = container.createDiv({ cls: 'tree-item nav-file' });
