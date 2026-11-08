@@ -1293,6 +1293,8 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     this.patchFirstLinkpathDest();
     this.setupExternalLinkRendering();
     this.setupExternalTabBadge();
+    // 预热外部文件名缓存，让裸 [[文件名]] 的 hover 预览能解析
+    window.setTimeout(() => { this.listExternalEntries().catch(() => {}); }, 1200);
 
     console.log(LOG, 'loaded v1.10.8', 'md=', this.mdRel(), 'assets=', this.assetRel(),
       'TExternalFile=', !!(obsidian.TExternalFile));
@@ -1734,6 +1736,12 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       path.resolve(mdDir) !== path.resolve(assetDir || '')) {
       await walk(mdDir, mdDir, '');
     }
+    if (!this._externalNameCache) this._externalNameCache = new Map();
+    for (const f of files) {
+      if (f.kind !== 'md') continue;
+      const base = path.basename(f.abs, path.extname(f.abs));
+      if (!this._externalNameCache.has(base)) this._externalNameCache.set(base, f.abs);
+    }
     return files.sort((a, b) => b.mtime - a.mtime);
   }
 
@@ -1917,6 +1925,13 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
    * 支持：../External Vault/x.md（相对当前笔记目录）、file:/绝对路径、绝对路径。
    * 只认库外、存在、扩展名为 md 的目标；其余返回 null，交回 Obsidian 原生逻辑。
    */
+  /** 按文件名（不含 .md）在外部库缓存里找绝对路径 */
+  findExternalByName(name) {
+    const key = String(name || '').replace(/\.md$/i, '').trim();
+    if (!key || !this._externalNameCache) return null;
+    return this._externalNameCache.get(key) || null;
+  }
+
   externalTargetForLink(linktext, sourcePath) {
     try {
       let raw = String(linktext || '').trim();
@@ -1944,6 +1959,16 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
           candidates.push(path.resolve(vRoot, raw));
           candidates.push(path.resolve(baseDir, raw));
         }
+      }
+      // 裸 [[文件名]]：库内找不到时，去外部库目录（含子目录缓存）里找
+      if (!raw.includes('/') && !/^file:/i.test(raw)) {
+        const mdDir = this.externalMdDir();
+        if (mdDir) {
+          candidates.push(path.join(mdDir, raw));
+          candidates.push(path.join(mdDir, raw + '.md'));
+        }
+        const cached = this.findExternalByName(raw);
+        if (cached) candidates.push(cached);
       }
       for (const abs of candidates) {
         if (!abs) continue;
