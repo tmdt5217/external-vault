@@ -3347,13 +3347,12 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     new obsidian.Notice(summary, 10000);
     console.log(LOG, summary);
     if (missingRefs) console.warn(LOG, missingRefs + ' 个附件引用找不到源文件，链接未重写');
-    if (doMove) {
-      try {
-        const changed = await this.rewriteExternalReferrers(
-          plans.map((p) => ({ src: p.src, dest: p.dest })));
-        if (changed) this.dbg('已改写引用笔记', changed);
-      } catch (e) { this.dbg('改写引用链接失败', e.message); }
-    }
+    // 无论是否剪切源文件，引用链接都按新位置改写
+    try {
+      const changed = await this.rewriteExternalReferrers(
+        plans.map((p) => ({ src: p.src, dest: p.dest })));
+      if (changed) this.dbg('已改写引用笔记', changed);
+    } catch (e) { this.dbg('改写引用链接失败', e.message); }
     if (doMove && cut.removed > 0) {
       this.settings.lastMove = {
         ts: Date.now(),
