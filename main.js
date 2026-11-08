@@ -4384,6 +4384,7 @@ class ExternalVaultView extends obsidian.ItemView {
   getIcon() { return 'lucide-folder-open'; }
 
   async onOpen() {
+    this.buildHeaderActions();
     this.render();
     await this.refresh();
     this.registerEvent(this.app.workspace.on('file-open', () => {
@@ -4394,24 +4395,20 @@ class ExternalVaultView extends obsidian.ItemView {
     }, 30000));
   }
 
-  async refresh() {
-    try { this.files = await this.plugin.listExternalEntries(); }
-    catch (e) { this.files = []; }
-    this.renderList();
-  }
-
-  render() {
-    const el = this.contentEl;
-    el.empty();
-    el.addClass('ev-panel');
-    const toolbar = el.createDiv({ cls: 'ev-panel-toolbar' });
+  /** 把按钮放进视图标题栏、文件夹图标右侧，随标题栏一起显示/折叠 */
+  buildHeaderActions() {
+    const header = this.containerEl.querySelector('.view-header');
+    if (!header) return;
+    const bar = document.createElement('div');
+    bar.className = 'ev-panel-toolbar-inline';
     const addIcon = (icon, label, fn) => {
-      const b = toolbar.createEl('button', {
-        cls: 'clickable-icon ev-panel-btn',
-        attr: { 'aria-label': label },
-      });
+      const b = document.createElement('div');
+      b.className = 'clickable-icon';
+      b.setAttribute('aria-label', label);
+      b.setAttribute('data-tooltip-position', 'bottom');
       if (obsidian.setIcon) obsidian.setIcon(b, icon);
       b.addEventListener('click', fn);
+      bar.appendChild(b);
     };
     addIcon('lucide-file-plus', tr('新建笔记'), () => this.plugin.guard(() => this.plugin.openNewNoteModal()));
     addIcon('lucide-arrow-down-up', tr('排序'), () => {
@@ -4425,6 +4422,21 @@ class ExternalVaultView extends obsidian.ItemView {
     addIcon('lucide-refresh-cw', tr('刷新'), () => { this.refresh().catch(() => {}); });
     addIcon('lucide-folder-open', tr('打开 Finder'), () => this.plugin.guard(() => this.plugin.revealExternalVault()));
     addIcon('lucide-more-horizontal', tr('更多'), (e) => this.showPanelMenu(e));
+    const left = header.querySelector('.view-header-left');
+    if (left) left.appendChild(bar);
+    else header.appendChild(bar);
+  }
+
+  async refresh() {
+    try { this.files = await this.plugin.listExternalEntries(); }
+    catch (e) { this.files = []; }
+    this.renderList();
+  }
+
+  render() {
+    const el = this.contentEl;
+    el.empty();
+    el.addClass('ev-panel');
     const head = el.createDiv({ cls: 'ev-panel-head' });
     const search = head.createEl('input', {
       type: 'search', placeholder: tr('搜索'),
