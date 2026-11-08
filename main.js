@@ -4400,10 +4400,8 @@ class ExternalVaultView extends obsidian.ItemView {
 
   /** 把按钮放进视图标题栏、文件夹图标右侧，随标题栏一起显示/折叠 */
   buildHeaderActions() {
-    const header = this.containerEl.querySelector('.view-header');
-    if (!header) return;
     const bar = document.createElement('div');
-    bar.className = 'ev-panel-toolbar-inline';
+    bar.className = 'ev-panel-toolbar-fallback is-visible';
     const addIcon = (icon, label, fn) => {
       const b = document.createElement('div');
       b.className = 'clickable-icon';
@@ -4425,11 +4423,6 @@ class ExternalVaultView extends obsidian.ItemView {
     addIcon('lucide-refresh-cw', tr('刷新'), () => { this.refresh().catch(() => {}); });
     addIcon('lucide-folder-open', tr('打开 Finder'), () => this.plugin.guard(() => this.plugin.revealExternalVault()));
     addIcon('lucide-more-horizontal', tr('更多'), (e) => this.showPanelMenu(e));
-    const left = header && header.querySelector('.view-header-left');
-    if (left) { left.appendChild(bar); return; }
-    if (header) { header.appendChild(bar); return; }
-    // 侧边栏视图可能没有 .view-header，回退到内容区顶部常驻工具条
-    bar.className = 'ev-panel-toolbar-fallback is-visible';
     this.contentEl.prepend(bar);
   }
 
