@@ -2199,6 +2199,14 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
         try {
           if (t.file) {
             await this.app.vault.process(t.file, () => next);
+            // 该笔记正打开时同步刷新编辑器，避免界面仍显示旧链接
+            try {
+              for (const leaf of this.app.workspace.getLeavesOfType('markdown')) {
+                const v = leaf.view;
+                if (!v || !v.file || v.file.path !== t.file.path || !v.editor) continue;
+                if (v.editor.getValue() !== next) v.editor.setValue(next);
+              }
+            } catch (e) { /* noop */ }
           } else {
             // 库外笔记若正打开着，直接改编辑器内容并保存，避免旧 buffer 覆盖磁盘
             let applied = false;
