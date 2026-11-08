@@ -78,7 +78,7 @@ a.ev-external-link,
 .ev-external-link,
 .cm-hmd-internal-link.ev-external-link,
 .cm-link.ev-external-link {
-  color: #e05252 !important;
+  color: rgb(188, 43, 22) !important;
   text-decoration: none !important;
   border-bottom: none !important;
   background-image: none !important;
@@ -95,7 +95,7 @@ a.ev-external-link,
 a.ev-external-link:hover,
 .cm-hmd-internal-link.ev-external-link:hover,
 .cm-link.ev-external-link:hover {
-  color: #e05252 !important;
+  color: rgb(188, 43, 22) !important;
   text-decoration: none !important;
 }
 /* Live Preview：覆盖 Obsidian 用 CSS 变量控制的链接颜色与下划线 */
@@ -103,12 +103,20 @@ span.cm-hmd-internal-link.ev-external-link,
 span.cm-hmd-internal-link.ev-external-link .cm-underline,
 .ev-external-link,
 .ev-external-link .cm-underline {
-  --link-color: #e05252;
-  --link-color-hover: #e05252;
+  --link-color: rgb(188, 43, 22);
+  --link-color-hover: rgb(188, 43, 22);
   --link-decoration: none;
   --link-decoration-hover: none;
-  color: #e05252 !important;
+  color: rgb(188, 43, 22) !important;
   text-decoration: none !important;
+}
+
+/* 库外笔记的标签页标题：红色（激活态也保持） */
+.workspace-tab-header-inner-title.ev-external-tab,
+.workspace-tab-header.is-active .workspace-tab-header-inner-title.ev-external-tab,
+.workspace-tab-header-inner-title.ev-external-tab .workspace-tab-header-inner-title-text {
+  color: rgb(188, 43, 22) !important;
+  text-decoration: none;
 }
 
 /* 库外笔记的标签页标题：追加「（外）」 */
