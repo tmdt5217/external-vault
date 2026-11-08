@@ -2176,7 +2176,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     this.registerMarkdownPostProcessor((el, ctx) => {
       try {
         if (!ctx || !ctx.sourcePath || String(ctx.sourcePath).startsWith('file:')) return;
-        const links = el.querySelectorAll('a.internal-link');
+        const links = el.querySelectorAll('a.internal-link, a.external-link');
         for (const a of links) {
           const href = a.getAttribute('data-href') || a.getAttribute('href');
           if (!href) continue;
@@ -2219,12 +2219,16 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
           const builder = new cmState.RangeSetBuilder();
           const sourcePath = self.activeSourcePath();
           if (!sourcePath || sourcePath.startsWith('file:')) return builder.finish();
-          const re = /\[[^\]]*\]\((<[^>]+>|[^)\s]+)\)/g;
+          // 同时匹配 [[wiki]]（含 #标题 / |别名）和 [文字](路径)
+          const re = /\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|[^\]]*)?\]\]|\[[^\]]*\]\((<[^>]+>|[^)\s]+)\)/g;
           for (const range of view.visibleRanges) {
             const text = view.state.sliceDoc(range.from, range.to);
             let m;
             while ((m = re.exec(text))) {
-              const target = m[1].replace(/^<|>$/g, '');
+              const target = m[1]
+                ? m[1].trim()
+                : String(m[2] || '').replace(/^<|>$/g, '');
+              if (!target) continue;
               if (!self.externalTargetForLink(target, sourcePath)) continue;
               const start = range.from + m.index;
               builder.add(start, start + m[0].length, mark);
