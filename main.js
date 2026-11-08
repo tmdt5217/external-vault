@@ -3039,7 +3039,6 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
         menu.addItem((item) => {
           itemRef = item;
           item
-            .setSection('action')
             .setTitle(outTitle(chosen.length))
             .setIcon('lucide-log-out')
             .onClick(() => this.guard(() => this.contextMoveOut(chosen.map((t) => t.file))));
@@ -3050,7 +3049,6 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       if (!canAdd(menu, inMenus)) return;
       try {
         menu.addItem((item) => item
-          .setSection('action')
           .setTitle(tr('移入 Vault（含附件）'))
           .setIcon('lucide-log-in')
           .onClick(() => this.guard(() => this.contextMoveIn(file))));
@@ -3060,7 +3058,6 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       if (!canAdd(menu, delMenus)) return;
       try {
         menu.addItem((item) => item
-          .setSection('action')
           .setTitle(tr('删除库外 MD（含附件）'))
           .setIcon('lucide-trash-2')
           .onClick(() => this.guard(() => this.promptDeleteExternalNote(file))));
@@ -3120,7 +3117,6 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
         if (!file || isExternalTFile(file) || !isMdPath(file.path)) return;
         if (!menu || typeof menu.addItem !== 'function') return;
         menu.addItem((item) => item
-          .setSection('action')
           .setTitle('插入库外文件链接')
           .setIcon('lucide-link')
           .onClick(() => this.guard(() => this.insertExternalLink())));
