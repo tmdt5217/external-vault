@@ -4778,6 +4778,35 @@ class ExternalVaultView extends obsidian.ItemView {
     });
     this.listEl = el.createDiv({ cls: 'ev-panel-list nav-files-container' });
     this.renderList();
+
+    // 库内文件列表 → 拖到面板：移出到外部库
+    this.registerDomEvent(this.listEl, 'dragover', (e) => {
+      if (e.dataTransfer) e.preventDefault();
+    });
+    this.registerDomEvent(this.listEl, 'drop', (e) => {
+      try {
+        const text = String(e.dataTransfer.getData('text/plain') || '').trim();
+        if (!text) return;
+        const rel = text.split('\n')[0].trim();
+        const file = this.app.vault.getAbstractFileByPath(rel) ||
+          this.app.metadataCache.getFirstLinkpathDest(rel, '');
+        if (!file || !isMdFileObject(file)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        this.plugin.guard(() => this.plugin.contextMoveOut(file));
+      } catch (err) { /* noop */ }
+    });
+    // 面板 → 拖到左侧文件列表：移入库内
+    this.registerDomEvent(document, 'drop', (e) => {
+      const abs = e.dataTransfer && e.dataTransfer.getData('application/x-external-vault');
+      if (!abs) return;
+      const nav = e.target && e.target.closest ? e.target.closest('.nav-files-container') : null;
+      if (!nav) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const file = { path: 'file:' + abs, extension: 'md', getRealPath: () => abs };
+      this.plugin.guard(() => this.plugin.contextMoveIn(file));
+    }, true);
   }
 
   renderList() {
@@ -4891,7 +4920,8 @@ class ExternalVaultView extends obsidian.ItemView {
             ? '![' + label + '](' + link + ')'
             : '[' + label + '](' + link + ')';
           e.dataTransfer.setData('text/plain', text);
-          e.dataTransfer.effectAllowed = 'copy';
+          e.dataTransfer.setData('application/x-external-vault', f.abs);
+          e.dataTransfer.effectAllowed = 'copyMove';
           title.classList.add('is-dragging');
         } catch (err) { /* noop */ }
       });
