@@ -1910,6 +1910,17 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
    * - 库内 → 外：[[名字]] 改成 [名字](库外相对路径)
    * - 外 → 内：指向外部路径的 markdown 链接改回 [[名字]]
    */
+  /** 判断绝对路径是否在外部库的 MD / 附件目录内 */
+  isInsideExternalVault(abs) {
+    if (!abs) return false;
+    const p = path.resolve(abs);
+    const dirs = [this.externalMdDir(), this.externalAssetDir()].filter(Boolean);
+    return dirs.some((d) => {
+      const base = path.resolve(d);
+      return p === base || p.startsWith(base + path.sep);
+    });
+  }
+
   async rewriteExternalReferrers(records) {
     if (!records || !records.length) return 0;
     const vRoot = vaultRoot(this.app);
