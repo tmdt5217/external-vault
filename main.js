@@ -1981,6 +1981,10 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
           changed += 1;
         } catch (e) { /* noop */ }
       }
+    };
+    // 分批并发读，避免几千个文件串行等待
+    for (let i = 0; i < targets.length; i += 16) {
+      await Promise.all(targets.slice(i, i + 16).map(rewriteOne));
     }
     return changed;
   }
@@ -2018,14 +2022,14 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     } catch (e) { /* noop */ }
     this.dbg('引用扫描：' + targets.length + ' 个文件，目标 ' +
       records.map((r) => path.basename(r.src)).join('、'));
-    for (const t of targets) {
-      if (records.some((r) => path.resolve(r.src) === path.resolve(t.abs))) continue;
+    const rewriteOne = async (t) => {
+      if (records.some((r) => path.resolve(r.src) === path.resolve(t.abs))) return;
       let content = '';
       try {
         content = t.file
           ? await this.app.vault.read(t.file)
           : await fs.promises.readFile(t.abs, 'utf8');
-      } catch (e) { continue; }
+      } catch (e) { return; }
       let next = content;
       const referrerAbs = t.abs;
       for (const [name, r] of byName) {
@@ -2194,11 +2198,14 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     const key = String(name || '').replace(/\.md$/i, '').trim();
     const mdDir = this.externalMdDir();
     if (!key || !mdDir || !fs.existsSync(mdDir)) return null;
+    let visited = 0;
     const walk = (dir, depth) => {
       let entries = [];
       try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return null; }
       for (const en of entries) {
         if (en.name.startsWith('.')) continue;
+        visited += 1;
+        if (visited > 400) return null; // 文件太多时不再同步扫，交给缓存/面板预热
         const p = path.join(dir, en.name);
         if (en.isDirectory()) {
           if (depth < 3) { const r = walk(p, depth + 1); if (r) return r; }
@@ -4855,6 +4862,18 @@ class ExternalVaultView extends obsidian.ItemView {
     window.setTimeout(() => {
       try { this.buildHeaderActions(); } catch (e) { /* noop */ }
     }, 80);
+    // 外部目录变化时防抖刷新，减少高频全量扫描
+    const watchDir = this.plugin.externalMdDir();
+    if (watchDir && fs.existsSync(watchDir)) {
+      try {
+        this._watcher = fs.watch(watchDir, { recursive: true }, () => {
+          window.clearTimeout(this._watchTimer);
+          this._watchTimer = window.setTimeout(() => {
+            this.refresh().catch(() => {});
+          }, 1200);
+        });
+      } catch (e) { /* noop */ }
+    }
     this.registerEvent(this.app.workspace.on('file-open', () => {
       this.refresh().catch(() => {});
     }));
