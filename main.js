@@ -2082,7 +2082,10 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     const ws = this.app.workspace;
     const leaves = ws.getLeavesOfType(VIEW_TYPE);
     if (leaves.length) { ws.revealLeaf(leaves[0]); return; }
-    const leaf = ws.getRightLeaf(false) || ws.getLeaf('tab');
+    // 首次打开：放到左侧边栏下方（文件列表下面），没有左侧栏时退回右侧
+    let leaf = null;
+    try { leaf = ws.getLeftLeaf(true); } catch (e) { /* noop */ }
+    if (!leaf) leaf = ws.getLeftLeaf(false) || ws.getRightLeaf(false) || ws.getLeaf('tab');
     await leaf.setViewState({ type: VIEW_TYPE, active: true });
     ws.revealLeaf(leaf);
   }
