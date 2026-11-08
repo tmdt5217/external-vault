@@ -2102,7 +2102,9 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
           const decoded = decodeURIComponent(href.replace(/^<|>$/g, ''));
           if (path.basename(decoded) !== oldFile) return m;
           const replaced = href.split(oldFile).join(newFile);
-          return '[' + text + '](' + replaced + ')';
+          // 显示文本正好是旧文件名时，一并改成新文件名
+          const newText = String(text || '').trim() === oldBase ? newBase : text;
+          return '[' + newText + '](' + replaced + ')';
         } catch (e) { return m; }
       });
       if (next !== content) {
