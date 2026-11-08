@@ -168,10 +168,16 @@ span.cm-hmd-internal-link.ev-external-link .cm-underline,
   border-left: 0 !important;
   transform: none !important;
 }
-.ev-panel .nav-file-title.is-active::before,
-.ev-panel .nav-file-title.is-active::after {
-  content: none;
-  display: none;
+/* Baseline 主题会给 .tree-item-self.is-active::before 加一个带负 margin 的圆点，
+   在 flex 行里会挤动文字；这里用更高优先级彻底禁掉，圆点交给 .ev-panel-bullet */
+body .ev-panel .nav-file-title.is-active::before,
+body .ev-panel .nav-file-title.is-active::after {
+  content: none !important;
+  display: none !important;
+  position: static !important;
+  margin: 0 !important;
+  width: 0 !important;
+  height: 0 !important;
 }
 .ev-panel .ev-panel-bullet {
   flex: none;
