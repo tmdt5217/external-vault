@@ -2069,6 +2069,16 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     new obsidian.Notice(lines.join('\n'), 12000);
   }
 
+  /** 立即刷新所有打开着的库外面板 */
+  refreshExternalPanels() {
+    try {
+      this.app.workspace.getLeavesOfType(VIEW_TYPE).forEach((leaf) => {
+        const v = leaf && leaf.view;
+        if (v && typeof v.refresh === 'function') v.refresh().catch(() => {});
+      });
+    } catch (e) { /* noop */ }
+  }
+
   /** 在右侧边栏打开常驻的库外文件面板 */
   async activateExternalPanel() {
     const ws = this.app.workspace;
@@ -3121,6 +3131,8 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       };
       try { await this.saveData(this.settings); } catch (e) { /* noop */ }
     }
+    // 移动完成后立即刷新右侧库外面板
+    this.refreshExternalPanels();
     return {
       notes: plans.length, assets: assetMap.size, missingRefs,
       removed: cut.removed, trashed: cut.trashed, failed: cut.failed, skipped, opened,
