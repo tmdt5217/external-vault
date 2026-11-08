@@ -976,6 +976,25 @@ function matchesExternalQuery(f, query) {
   return false;
 }
 
+/**
+ * 搜索库外文件：标题（文件名）、路径、别名、拼音首字母优先；
+ * 都没命中时再看正文，正文命中的排在后面。
+ */
+function searchExternalEntries(files, query, contents) {
+  const q = String(query || '').trim().toLowerCase();
+  if (!q) return files;
+  const scored = [];
+  for (const f of files) {
+    if (matchesExternalQuery(f, q)) { scored.push({ f, rank: 0 }); continue; }
+    const c = contents && contents.get(f.abs);
+    if (c && c.text && c.text.toLowerCase().includes(q)) {
+      scored.push({ f, rank: 1 });
+    }
+  }
+  scored.sort((a, b) => (a.rank - b.rank) || (b.f.mtime - a.f.mtime));
+  return scored.map((x) => x.f);
+}
+
 /** 从 YAML frontmatter 提取 aliases / alias（支持行内数组与块状列表） */
 function parseFrontmatterAliases(text) {
   const fm = String(text || '').match(/^---\r?\n([\s\S]*?)\r?\n---/);
@@ -1641,6 +1660,21 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       await walk(mdDir, mdDir, '');
     }
     return files.sort((a, b) => b.mtime - a.mtime);
+  }
+
+  /** 按 mtime 缓存库外 MD 正文，供搜索使用 */
+  async ensureExternalContents(entries) {
+    if (!this._contentCache) this._contentCache = new Map();
+    for (const f of entries || []) {
+      if (f.kind !== 'md') continue;
+      const cached = this._contentCache.get(f.abs);
+      if (cached && cached.mtime === f.mtime) continue;
+      try {
+        const text = await fs.promises.readFile(f.abs, 'utf8');
+        this._contentCache.set(f.abs, { mtime: f.mtime, text });
+      } catch (e) { /* noop */ }
+    }
+    return this._contentCache;
   }
 
   /** 打开库外的图片 / PDF / 其他文件：优先 Obsidian 视图，失败则用系统默认应用 */
@@ -3421,7 +3455,9 @@ class ExternalFilesModal extends obsidian.Modal {
     search.value = this.query || '';
     search.addEventListener('input', () => {
       this.query = search.value;
-      this.renderList();
+      this.plugin.ensureExternalContents(this.files)
+        .then(() => this.renderList())
+        .catch(() => this.renderList());
     });
 
     el.createEl('p', {
@@ -3476,9 +3512,7 @@ class ExternalFilesModal extends obsidian.Modal {
 
   /** 当前搜索词过滤后的文件（按名称或相对路径，忽略大小写） */
   filtered() {
-    const q = String(this.query || '').trim().toLowerCase();
-    if (!q) return this.files;
-    return this.files.filter((f) => matchesExternalQuery(f, q));
+    return searchExternalEntries(this.files, this.query, this.plugin._contentCache);
   }
 
   /** 只重建列表，让搜索框保持焦点与输入法状态 */
@@ -4252,7 +4286,9 @@ class ExternalVaultView extends obsidian.ItemView {
     search.value = this.query;
     search.addEventListener('input', () => {
       this.query = search.value;
-      this.renderList();
+      this.plugin.ensureExternalContents(this.files)
+        .then(() => this.renderList())
+        .catch(() => this.renderList());
     });
     const actions = head.createDiv({ cls: 'ev-panel-actions' });
     const refreshBtn = actions.createEl('button', { text: tr('刷新'), cls: 'ev-panel-btn' });
@@ -4267,7 +4303,7 @@ class ExternalVaultView extends obsidian.ItemView {
     if (!this.listEl) return;
     this.listEl.empty();
     const q = String(this.query || '').trim().toLowerCase();
-    const rows = q ? this.files.filter((f) => matchesExternalQuery(f, q)) : this.files;
+    const rows = searchExternalEntries(this.files, q, this.plugin._contentCache);
     if (!rows.length) {
       this.listEl.createDiv({
         cls: 'ev-panel-empty',
