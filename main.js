@@ -1926,10 +1926,14 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
    */
   /** 重命名库外文件，并同步改写引用它的链接 */
   renameExternalFile(abs) {
-    const base = path.basename(abs);
+    const ext = path.extname(abs);
+    const base = path.basename(abs, ext);
     new TextPromptModal(this.app, tr('重命名文件'), base, async (v) => {
-      const name = String(v || '').trim();
-      if (!name || name === base) return;
+      let name = String(v || '').trim();
+      if (!name) return;
+      // 输入框只显示主名，用户没写扩展名时自动补回
+      if (!path.extname(name) && ext) name += ext;
+      if (name === path.basename(abs)) return;
       const dest = path.join(path.dirname(abs), name);
       if (fs.existsSync(dest)) throw new Error('同名文件已存在：' + name);
       await fs.promises.rename(abs, dest);
@@ -4693,6 +4697,7 @@ class TextPromptModal extends obsidian.Modal {
 
   onOpen() {
     this.titleEl.setText(this.titleText);
+    try { this.modalEl.addClass('external-vault-modal'); } catch (e) { /* noop */ }
     const el = this.contentEl;
     el.empty();
     const input = el.createEl('input', { type: 'text', placeholder: this.placeholder });
