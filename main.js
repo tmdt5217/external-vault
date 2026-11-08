@@ -3882,17 +3882,23 @@ class ExternalFileImageSettingTab extends obsidian.PluginSettingTab {
     }
     new obsidian.Setting(el)
       .setDesc(tr('每个外部库有独立的 MD 和附件目录；在顶部「当前外部库」切换'))
-      .addButton((b) => b.setButtonText(tr('添加外部库')).setCta().onClick(async () => {
-        const n = (this.plugin.settings.externalVaults || []).length + 2;
-        const item = {
-          id: 'vault-' + Date.now(),
-          name: tr('外部库') + ' ' + n,
-          mdDir: '../External Vault ' + n,
-          assetDir: '../External Vault ' + n + '/attachments',
-        };
-        this.plugin.settings.externalVaults = (this.plugin.settings.externalVaults || []).concat([item]);
-        await save('externalVaults', this.plugin.settings.externalVaults);
-        this.display();
+      .addButton((b) => b.setButtonText(tr('添加外部库')).setCta().onClick(() => {
+        pickDirectory(async (dir) => {
+          if (!dir) return;
+          const mdRel = this.toRelative(dir) || dir;
+          const assetAbs = path.join(dir, 'attachments');
+          const assetRel = this.toRelative(assetAbs) || assetAbs;
+          const item = {
+            id: 'vault-' + Date.now(),
+            name: path.basename(dir) || tr('外部库'),
+            mdDir: mdRel,
+            assetDir: assetRel,
+          };
+          this.plugin.settings.externalVaults =
+            (this.plugin.settings.externalVaults || []).concat([item]);
+          await save('externalVaults', this.plugin.settings.externalVaults);
+          this.display();
+        });
       }));
 
     new obsidian.Setting(el)
