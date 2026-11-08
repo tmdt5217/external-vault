@@ -4264,19 +4264,15 @@ class ExternalVaultView extends obsidian.ItemView {
     }
     for (const f of rows) {
       const row = this.listEl.createDiv({ cls: 'ev-panel-row' });
-      const kindLabel = f.kind === 'md' ? 'MD'
-        : (f.kind === 'pdf' ? 'PDF' : (f.kind === 'image' ? 'IMG' : 'FILE'));
       const nameLine = row.createDiv({ cls: 'ev-panel-name' });
-      nameLine.createSpan({ cls: 'ev-files-kind', text: kindLabel });
-      nameLine.createSpan({ text: path.basename(f.abs) });
+      nameLine.createSpan({ text: path.basename(f.abs, path.extname(f.abs)) });
       const bits = [];
       if (f.kind === 'md') {
         if (f.aliases && f.aliases.length) bits.push(f.aliases.join(' / '));
-        bits.push(f.assets ? f.assets + tr(' 个附件') : tr('无附件'));
       } else {
         bits.push(formatBytes(f.size));
       }
-      row.createDiv({ cls: 'ev-panel-meta', text: bits.join(' · ') });
+      if (bits.length) row.createDiv({ cls: 'ev-panel-meta', text: bits.join(' · ') });
       row.addEventListener('click', () => {
         this.listEl.querySelectorAll('.ev-panel-row.is-active')
           .forEach((x) => x.classList.remove('is-active'));
