@@ -187,6 +187,19 @@ const EN = {
   '还没有库外 Markdown 文件': 'No external Markdown files yet',
   ' 个附件': ' attachments',
   '无附件': 'No attachments',
+  '库外文件：清理孤儿附件': 'External files: Clean up orphan attachments',
+  '清理孤儿附件': 'Clean up orphan attachments',
+  '下面这些文件在附件目录里，但没有被任何库外笔记引用。删除会移入系统废纸篓。': 'These files are in the attachments folder but are not referenced by any external note. Deleting moves them to the system trash.',
+  '目录：': 'Folder: ',
+  '全选': 'Select all',
+  '删除选中（移入废纸篓）': 'Delete selected (move to trash)',
+  '关闭': 'Close',
+  '没有发现孤儿附件': 'No orphan attachments found',
+  '已选': 'Selected',
+  '个': 'items',
+  '已删除': 'Deleted',
+  '个孤儿附件': 'orphan attachments',
+  '个删除失败': 'failed to delete',
   // 命令
   '库外文件：新建 Markdown': 'External files: New Markdown',
   '库外文件：打开 External Vault 菜单': 'External files: Open External Vault menu',
@@ -852,6 +865,14 @@ function rewriteContent(content, items, assetMap, relAssetDir, style) {
   return out;
 }
 
+/** 文件大小的人类可读写法 */
+function formatBytes(n) {
+  const v = Number(n) || 0;
+  if (v < 1024) return v + ' B';
+  if (v < 1024 * 1024) return (v / 1024).toFixed(1) + ' KB';
+  return (v / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
 /** 从 YAML frontmatter 提取 aliases / alias（支持行内数组与块状列表） */
 function parseFrontmatterAliases(text) {
   const fm = String(text || '').match(/^---\r?\n([\s\S]*?)\r?\n---/);
@@ -988,6 +1009,11 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       id: 'manage-external-files',
       name: tr('库外文件：查看全部 / 批量删除'),
       callback: () => this.guard(() => this.openExternalFilesModal()),
+    });
+    this.addCommand({
+      id: 'cleanup-orphan-assets',
+      name: tr('库外文件：清理孤儿附件'),
+      callback: () => this.guard(() => this.openOrphanAssetsModal()),
     });
     this.addCommand({
       id: 'insert-external-link',
@@ -1380,6 +1406,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
         if (this.settings.showNotice) new obsidian.Notice('已复制：' + mdDir);
       });
       add('管理库外文件…', 'lucide-files', () => this.openExternalFilesModal());
+      add('清理孤儿附件…', 'lucide-trash-2', () => this.openOrphanAssetsModal());
       menu.addSeparator();
       const notes = listExternalMdFiles(mdDir, this.settings.ribbonMaxNotes);
       if (!notes.length) {
@@ -1435,6 +1462,52 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       });
     }
     return files.sort((a, b) => b.mtime - a.mtime);
+  }
+
+  /** 扫描附件目录里没有被任何库外笔记引用的文件 */
+  async findOrphanAssets() {
+    const assetDir = this.externalAssetDir();
+    const mdDir = this.externalMdDir();
+    if (!assetDir || !fs.existsSync(assetDir)) return [];
+    const used = new Set();
+    let mdFiles = [];
+    try { mdFiles = await listMarkdownFiles(mdDir, true, 8); } catch (e) { mdFiles = []; }
+    for (const md of mdFiles) {
+      try {
+        for (const a of this.assetPathsIn(md)) used.add(path.resolve(a));
+      } catch (e) { /* noop */ }
+    }
+    const files = [];
+    const walk = async (dir) => {
+      let entries = [];
+      try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); }
+      catch (e) { return; }
+      for (const en of entries) {
+        if (en.name.startsWith('.')) continue;
+        const p = path.join(dir, en.name);
+        if (en.isDirectory()) await walk(p);
+        else if (en.isFile()) {
+          if (isMdPath(en.name)) continue; // 附件目录里误放的笔记不当作孤儿附件
+          let st = null;
+          try { st = fs.statSync(p); } catch (e) { /* noop */ }
+          files.push({
+            abs: p,
+            rel: path.relative(assetDir, p).split(path.sep).join('/'),
+            size: st ? st.size : 0,
+            mtime: st ? st.mtimeMs : 0,
+          });
+        }
+      }
+    };
+    await walk(assetDir);
+    return files
+      .filter((f) => !used.has(path.resolve(f.abs)))
+      .sort((a, b) => b.mtime - a.mtime);
+  }
+
+  /** 打开孤儿附件清理弹窗 */
+  openOrphanAssetsModal() {
+    new OrphanAssetsModal(this.app, this).open();
   }
 
   /** 在右侧边栏打开常驻的库外文件面板 */
@@ -3700,6 +3773,117 @@ class ExternalFileImageSettingTab extends obsidian.PluginSettingTab {
   /** 选中的绝对路径 → 相对 vault 根目录（允许 ../ 到库外、与库同级） */
   toRelative(dir) {
     return toVaultRelative(this.app, dir);
+  }
+}
+
+/** 孤儿附件清理：列出附件目录里没有任何库外笔记引用的文件 */
+class OrphanAssetsModal extends obsidian.Modal {
+  constructor(app, plugin) {
+    super(app);
+    this.plugin = plugin;
+    this.files = [];
+    this.selected = new Set();
+    this.listEl = null;
+    this.countEl = null;
+    this.allBox = null;
+  }
+
+  async onOpen() {
+    this.titleEl.setText(tr('清理孤儿附件'));
+    await this.refresh();
+  }
+
+  async refresh() {
+    this.files = await this.plugin.findOrphanAssets();
+    this.selected.clear();
+    this.render();
+  }
+
+  render() {
+    const el = this.contentEl;
+    el.empty();
+    el.addClass('external-vault-modal');
+    const head = el.createDiv({ cls: 'ev-files-head' });
+    head.createEl('h2', { text: tr('清理孤儿附件') });
+    el.createEl('p', {
+      cls: 'setting-item-description',
+      text: tr('下面这些文件在附件目录里，但没有被任何库外笔记引用。删除会移入系统废纸篓。') +
+        ' ' + tr('目录：') + this.plugin.externalAssetDir(),
+    });
+    const toolbar = el.createDiv({ cls: 'ev-files-toolbar' });
+    const all = toolbar.createEl('label', { cls: 'ev-files-all' });
+    this.allBox = all.createEl('input', { type: 'checkbox' });
+    this.allBox.addEventListener('change', () => {
+      if (this.allBox.checked) this.files.forEach((f) => this.selected.add(f.abs));
+      else this.selected.clear();
+      this.renderList();
+    });
+    all.createSpan({ text: tr('全选') });
+    this.countEl = toolbar.createSpan({ cls: 'ev-files-count', text: '' });
+    this.listEl = el.createDiv({ cls: 'ev-files-list' });
+    this.renderList();
+    const buttons = el.createDiv({ cls: 'ev-buttons' });
+    const finder = buttons.createEl('button', { text: tr('打开 Finder'), cls: 'ev-finder-btn' });
+    finder.addEventListener('click', () => this.plugin.guard(() => this.plugin.revealExternalAssets()));
+    const ok = buttons.createEl('button', { text: tr('删除选中（移入废纸篓）'), cls: 'mod-warning' });
+    ok.addEventListener('click', () => this.plugin.guard(() => this.deleteSelected()));
+    const close = buttons.createEl('button', { text: tr('关闭') });
+    close.addEventListener('click', () => this.close());
+    this.updateFooter();
+  }
+
+  renderList() {
+    if (!this.listEl) return;
+    this.listEl.empty();
+    if (!this.files.length) {
+      this.listEl.createDiv({ cls: 'ev-files-empty', text: tr('没有发现孤儿附件') });
+      this.updateFooter();
+      return;
+    }
+    for (const f of this.files) {
+      const row = this.listEl.createEl('label', { cls: 'ev-files-row' });
+      const box = row.createEl('input', { type: 'checkbox' });
+      box.checked = this.selected.has(f.abs);
+      box.addEventListener('change', () => {
+        if (box.checked) this.selected.add(f.abs);
+        else this.selected.delete(f.abs);
+        this.updateFooter();
+      });
+      const main = row.createDiv({ cls: 'ev-files-main' });
+      main.createDiv({ cls: 'ev-files-name', text: path.basename(f.abs) });
+      main.createDiv({ cls: 'ev-files-path', text: f.rel });
+      const meta = row.createDiv({ cls: 'ev-files-meta' });
+      meta.textContent = formatBytes(f.size) +
+        (f.mtime ? ' · ' + new Date(f.mtime).toLocaleString() : '');
+    }
+    this.updateFooter();
+  }
+
+  updateFooter() {
+    if (this.countEl) {
+      const total = Array.from(this.selected).reduce((n, abs) => {
+        const f = this.files.find((x) => x.abs === abs);
+        return n + (f ? f.size : 0);
+      }, 0);
+      this.countEl.textContent = tr('已选') + ' ' + this.selected.size + ' ' + tr('个') +
+        ' · ' + formatBytes(total);
+    }
+    if (this.allBox) {
+      this.allBox.checked = this.files.length > 0 &&
+        this.files.every((f) => this.selected.has(f.abs));
+    }
+  }
+
+  async deleteSelected() {
+    const list = Array.from(this.selected);
+    if (!list.length) return;
+    const res = await cutSourceFiles(list, true);
+    new obsidian.Notice(
+      tr('已删除') + ' ' + res.removed + ' ' + tr('个孤儿附件') +
+      (res.failed.length ? '\n' + res.failed.length + ' ' + tr('个删除失败') : ''),
+      6000,
+    );
+    await this.refresh();
   }
 }
 
