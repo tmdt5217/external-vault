@@ -72,6 +72,7 @@ const path = require('path');
 const os = require('os');
 
 const LOG = '[external-vault]';
+const VIEW_TYPE = 'external-vault-panel';
 
 /** 简易模式内置目录，全部相对 vault 根目录（../ = 与库同级） */
 const SIMPLE_MD_REL = '../External Vault';
@@ -127,7 +128,7 @@ const EN = {
   '移入 / 移出后剪切源文件（删除原件）': 'Cut source files after moving (delete originals)',
   '默认开 = 真正剪切，源文件从原位置直接删除，不生成额外备份目录；关闭则只复制。想留后路可开启下面的「剪切时移入系统废纸篓」': 'On = true cut: originals are deleted from the original location without extra backup folders. Off = copy only. Enable "Move cut files to system trash" below if you want a safety net.',
   '剪切时移入系统废纸篓': 'Move cut files to system trash',
-  '默认关 = 直接从磁盘删除；开启后源文件移入系统废纸篓，可找回。对右键菜单和命令面板同时生效': 'Off = delete from disk. On = move originals to the system trash so they can be restored. Applies to both context menus and commands.',
+  '默认开 = 源文件移入系统废纸篓，可找回；关闭则直接从磁盘删除。对右键菜单和命令面板同时生效': 'On = move originals to the system trash so they can be restored. Off = delete from disk. Applies to both context menus and commands.',
   '安全处理：删除源文件前会先确认所有目标文件已写盘；被其他笔记共用的附件只复制、保留原件。注意：移出 Vault 后库内其他笔记指向该笔记的 [[双链]] 会失效，直接删除不可撤销。': 'Safety: source files are deleted only after every target file is verified on disk. Attachments shared with other notes are copied, not deleted. Note: moving a note out of the vault breaks [[wiki links]] pointing to it, and deletion cannot be undone.',
   'Ribbon 按钮：打开 External Vault': 'Ribbon button: open External Vault',
   '左键默认弹出菜单，右键始终弹出完整菜单；目录路径见上方「目录模式」。': 'Left click opens the menu by default; right click always opens the full menu. Folder paths are shown under "Folder mode" above.',
@@ -177,6 +178,15 @@ const EN = {
   '搜索文件名、路径或别名…': 'Search name, path or alias…',
   '别名：': 'Aliases: ',
   '确认删除库外 MD（含附件）': 'Delete external note (with attachments)?',
+  '库外文件：打开侧边栏面板': 'External files: Open sidebar panel',
+  '打开库外文件面板': 'Open external files panel',
+  '刷新': 'Refresh',
+  '打开': 'Open',
+  '在 Finder 中显示': 'Show in Finder',
+  '没有匹配的文件': 'No matching files',
+  '还没有库外 Markdown 文件': 'No external Markdown files yet',
+  ' 个附件': ' attachments',
+  '无附件': 'No attachments',
   // 命令
   '库外文件：新建 Markdown': 'External files: New Markdown',
   '库外文件：打开 External Vault 菜单': 'External files: Open External Vault menu',
@@ -230,7 +240,7 @@ const DEFAULT_SETTINGS = {
   handleOtherAttachments: true,         // 拖入非图片文件（PDF 等）也存进附件目录
   moveSourceAfterTransfer: false,       // 命令面板：转移后删除源文件（默认关 = 只复制）
   transferRecursive: false,             // 批量转移时是否包含子文件夹
-  cutUseTrash: false,                   // 剪切时移入系统废纸篓（默认关 = 直接从磁盘删除）
+  cutUseTrash: true,                    // 剪切时移入系统废纸篓（默认开，误删可恢复）
   // ---- 右键菜单（v1.4） ----
   contextMenuEnabled: true,             // 是否在右键菜单里显示「移出 / 移入 Vault」
   contextMenuVaultMdFolder: '',         // 移入 Vault 时 MD 放哪（相对库根，空 = 库根目录）
@@ -951,6 +961,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     this.registerContextMenus();
     this.setupRibbon();
     this.addSettingTab(new ExternalFileImageSettingTab(this.app, this));
+    this.registerView(VIEW_TYPE, (leaf) => new ExternalVaultView(leaf, this));
 
     // ---- 命令面板：所有功能统一用「库外文件：」前缀，输入这四个字即可看到全部 ----
     this.addCommand({
@@ -962,6 +973,11 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       id: 'open-external-vault',
       name: tr('库外文件：打开 External Vault 菜单'),
       callback: () => { this.showExternalVaultMenu(null); },
+    });
+    this.addCommand({
+      id: 'open-external-panel',
+      name: tr('库外文件：打开侧边栏面板'),
+      callback: () => this.guard(() => this.activateExternalPanel()),
     });
     this.addCommand({
       id: 'open-latest-external-note',
@@ -1356,6 +1372,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
         });
       };
       add('打开External Vault', 'lucide-folder-open', () => this.openExternalFilesModal({ mode: 'open' }));
+      add('打开库外文件面板', 'lucide-panel-right', () => this.activateExternalPanel());
       add('打开附件目录', 'lucide-image', () => this.revealExternalAssets());
       add('新建库外MD', 'lucide-file-plus', () => this.openNewNoteModal());
       add('复制External Vault路径', 'lucide-copy', async () => {
@@ -1390,6 +1407,56 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
   /** 库外文件管理器：默认多选删除；mode='pick' 时单击选中并回调 */
   openExternalFilesModal(opts) {
     new ExternalFilesModal(this.app, this, opts || {}).open();
+  }
+
+  /** 读取库外 MD 列表（含附件数与 frontmatter 别名），弹窗与侧边栏共用 */
+  async listExternalEntries() {
+    const dir = this.externalMdDir();
+    let list = [];
+    try { list = await listMarkdownFiles(dir, true, 8); } catch (e) { list = []; }
+    const files = [];
+    for (const abs of list) {
+      let st = null;
+      try { st = fs.statSync(abs); } catch (e) { /* noop */ }
+      let assets = 0;
+      try {
+        assets = this.assetPathsIn(abs)
+          .filter((a) => !isInsideVault(a, this.app) && fs.existsSync(a)).length;
+      } catch (e) { /* noop */ }
+      let aliases = [];
+      try { aliases = parseFrontmatterAliases(await fs.promises.readFile(abs, 'utf8')); }
+      catch (e) { /* noop */ }
+      files.push({
+        abs,
+        rel: path.relative(dir, abs).split(path.sep).join('/'),
+        mtime: st ? st.mtimeMs : 0,
+        assets,
+        aliases,
+      });
+    }
+    return files.sort((a, b) => b.mtime - a.mtime);
+  }
+
+  /** 在右侧边栏打开常驻的库外文件面板 */
+  async activateExternalPanel() {
+    const ws = this.app.workspace;
+    const leaves = ws.getLeavesOfType(VIEW_TYPE);
+    if (leaves.length) { ws.revealLeaf(leaves[0]); return; }
+    const leaf = ws.getRightLeaf(false) || ws.getLeaf('tab');
+    await leaf.setViewState({ type: VIEW_TYPE, active: true });
+    ws.revealLeaf(leaf);
+  }
+
+  /** 在系统文件管理器中定位单个文件 */
+  revealExternalFile(abs) {
+    try {
+      const { shell } = require('electron');
+      if (shell && typeof shell.showItemInFolder === 'function') {
+        shell.showItemInFolder(abs);
+        return;
+      }
+    } catch (e) { /* noop */ }
+    this.revealExternalVault();
   }
 
   /**
@@ -2993,30 +3060,7 @@ class ExternalFilesModal extends obsidian.Modal {
   }
 
   async load() {
-    const dir = this.plugin.externalMdDir();
-    let list = [];
-    try { list = await listMarkdownFiles(dir, true, 8); } catch (e) { list = []; }
-    const files = [];
-    for (const abs of list) {
-      let st = null;
-      try { st = fs.statSync(abs); } catch (e) { /* noop */ }
-      let assets = 0;
-      try {
-        assets = this.plugin.assetPathsIn(abs)
-          .filter((a) => !isInsideVault(a, this.app) && fs.existsSync(a)).length;
-      } catch (e) { /* noop */ }
-      let aliases = [];
-      try { aliases = parseFrontmatterAliases(await fs.promises.readFile(abs, 'utf8')); }
-      catch (e) { /* noop */ }
-      files.push({
-        abs,
-        rel: path.relative(dir, abs).split(path.sep).join('/'),
-        mtime: st ? st.mtimeMs : 0,
-        assets,
-        aliases,
-      });
-    }
-    this.files = files.sort((a, b) => b.mtime - a.mtime);
+    this.files = await this.plugin.listExternalEntries();
     this.render();
   }
 
@@ -3529,7 +3573,7 @@ class ExternalFileImageSettingTab extends obsidian.PluginSettingTab {
 
     new obsidian.Setting(el)
       .setName(tr('剪切时移入系统废纸篓'))
-      .setDesc(tr('默认关 = 直接从磁盘删除；开启后源文件移入系统废纸篓，可找回。对右键菜单和命令面板同时生效'))
+      .setDesc(tr('默认开 = 源文件移入系统废纸篓，可找回；关闭则直接从磁盘删除。对右键菜单和命令面板同时生效'))
       .addToggle((t) => t.setValue(this.plugin.settings.cutUseTrash)
         .onChange((v) => save('cutUseTrash', v)));
 
@@ -3656,6 +3700,109 @@ class ExternalFileImageSettingTab extends obsidian.PluginSettingTab {
   /** 选中的绝对路径 → 相对 vault 根目录（允许 ../ 到库外、与库同级） */
   toRelative(dir) {
     return toVaultRelative(this.app, dir);
+  }
+}
+
+/** 右侧边栏常驻的库外文件面板 */
+class ExternalVaultView extends obsidian.ItemView {
+  constructor(leaf, plugin) {
+    super(leaf);
+    this.plugin = plugin;
+    this.files = [];
+    this.query = '';
+    this.listEl = null;
+  }
+
+  getViewType() { return VIEW_TYPE; }
+  getDisplayText() { return 'External Vault'; }
+  getIcon() { return 'lucide-folder-open'; }
+
+  async onOpen() {
+    this.render();
+    await this.refresh();
+    this.registerInterval(window.setInterval(() => {
+      this.refresh().catch(() => {});
+    }, 30000));
+  }
+
+  async refresh() {
+    try { this.files = await this.plugin.listExternalEntries(); }
+    catch (e) { this.files = []; }
+    this.renderList();
+  }
+
+  render() {
+    const el = this.contentEl;
+    el.empty();
+    el.addClass('ev-panel');
+    const head = el.createDiv({ cls: 'ev-panel-head' });
+    const search = head.createEl('input', {
+      type: 'search', placeholder: tr('搜索文件名、路径或别名…'),
+    });
+    search.value = this.query;
+    search.addEventListener('input', () => {
+      this.query = search.value;
+      this.renderList();
+    });
+    const actions = head.createDiv({ cls: 'ev-panel-actions' });
+    const refreshBtn = actions.createEl('button', { text: tr('刷新'), cls: 'ev-panel-btn' });
+    refreshBtn.addEventListener('click', () => { this.refresh().catch(() => {}); });
+    const finderBtn = actions.createEl('button', { text: 'Finder', cls: 'ev-panel-btn' });
+    finderBtn.addEventListener('click', () => this.plugin.guard(() => this.plugin.revealExternalVault()));
+    this.listEl = el.createDiv({ cls: 'ev-panel-list' });
+    this.renderList();
+  }
+
+  renderList() {
+    if (!this.listEl) return;
+    this.listEl.empty();
+    const q = String(this.query || '').trim().toLowerCase();
+    const rows = q ? this.files.filter((f) =>
+      f.rel.toLowerCase().includes(q) ||
+      path.basename(f.abs).toLowerCase().includes(q) ||
+      (f.aliases || []).some((a) => String(a).toLowerCase().includes(q))) : this.files;
+    if (!rows.length) {
+      this.listEl.createDiv({
+        cls: 'ev-panel-empty',
+        text: this.files.length ? tr('没有匹配的文件') : tr('还没有库外 Markdown 文件'),
+      });
+      return;
+    }
+    for (const f of rows) {
+      const row = this.listEl.createDiv({ cls: 'ev-panel-row' });
+      row.createDiv({ cls: 'ev-panel-name', text: path.basename(f.abs, '.md') });
+      const bits = [];
+      if (f.aliases && f.aliases.length) bits.push(f.aliases.join(' / '));
+      bits.push(f.assets ? f.assets + tr(' 个附件') : tr('无附件'));
+      row.createDiv({ cls: 'ev-panel-meta', text: bits.join(' · ') });
+      row.addEventListener('click', () => {
+        this.listEl.querySelectorAll('.ev-panel-row.is-active')
+          .forEach((x) => x.classList.remove('is-active'));
+        row.classList.add('is-active');
+      });
+      row.addEventListener('dblclick', () => {
+        this.plugin.guard(() => this.plugin.openExternalMd(f.abs));
+      });
+      row.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        this.showRowMenu(e, f);
+      });
+    }
+  }
+
+  showRowMenu(evt, f) {
+    if (!obsidian.Menu) return;
+    const menu = new obsidian.Menu();
+    const file = { path: 'file:' + f.abs, extension: 'md', getRealPath: () => f.abs };
+    menu.addItem((i) => i.setTitle(tr('打开')).setIcon('lucide-file-text')
+      .onClick(() => this.plugin.guard(() => this.plugin.openExternalMd(f.abs))));
+    menu.addItem((i) => i.setTitle(tr('在 Finder 中显示')).setIcon('lucide-folder-open')
+      .onClick(() => this.plugin.guard(() => this.plugin.revealExternalFile(f.abs))));
+    menu.addItem((i) => i.setTitle(tr('移入 Vault（含附件）')).setIcon('lucide-log-in')
+      .onClick(() => this.plugin.guard(() => this.plugin.contextMoveIn(file))));
+    menu.addItem((i) => i.setTitle(tr('删除库外 MD（含附件）')).setIcon('lucide-trash')
+      .onClick(() => this.plugin.guard(() => this.plugin.promptDeleteExternalNote(file))));
+    menu.showAtMouseEvent(evt);
   }
 }
 
