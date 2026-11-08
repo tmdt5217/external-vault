@@ -176,6 +176,7 @@ const EN = {
   '跟随 Obsidian': 'Follow Obsidian',
   '打开 Finder': 'Open in Finder',
   '搜索文件名、路径或别名…': 'Search name, path or alias…',
+  '搜索文件名、路径、别名或拼音首字母…': 'Search name, path, alias or pinyin initials…',
   '别名：': 'Aliases: ',
   '确认删除库外 MD（含附件）': 'Delete external note (with attachments)?',
   '库外文件：打开侧边栏面板': 'External files: Open sidebar panel',
@@ -871,6 +872,65 @@ function formatBytes(n) {
   if (v < 1024) return v + ' B';
   if (v < 1024 * 1024) return (v / 1024).toFixed(1) + ' KB';
   return (v / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+let PY_INITIALS = null;
+
+/** 用 GBK 解码构建「汉字 → 拼音首字母」映射（GB2312 一级汉字，3755 字） */
+function buildPinyinInitials() {
+  if (PY_INITIALS) return PY_INITIALS;
+  const ranges = [
+    ['A', 0xB0A1, 0xB0C4], ['B', 0xB0C5, 0xB2C0], ['C', 0xB2C1, 0xB4ED],
+    ['D', 0xB4EE, 0xB6E9], ['E', 0xB6EA, 0xB7A1], ['F', 0xB7A2, 0xB8C0],
+    ['G', 0xB8C1, 0xB9FD], ['H', 0xB9FE, 0xBBF6], ['J', 0xBBF7, 0xBFA5],
+    ['K', 0xBFA6, 0xC0AB], ['L', 0xC0AC, 0xC2E7], ['M', 0xC2E8, 0xC4C2],
+    ['N', 0xC4C3, 0xC5B5], ['O', 0xC5B6, 0xC5BD], ['P', 0xC5BE, 0xC6D9],
+    ['Q', 0xC6DA, 0xC8BA], ['R', 0xC8BB, 0xC8F5], ['S', 0xC8F6, 0xCBF9],
+    ['T', 0xCBFA, 0xCDD9], ['W', 0xCDDA, 0xCEF3], ['X', 0xCEF4, 0xD1B8],
+    ['Y', 0xD1B9, 0xD4D0], ['Z', 0xD4D1, 0xD7F9],
+  ];
+  const map = new Map();
+  let dec = null;
+  try { dec = new TextDecoder('gbk'); } catch (e) { dec = null; }
+  if (dec) {
+    for (let hi = 0xB0; hi <= 0xD7; hi += 1) {
+      for (let lo = 0xA1; lo <= 0xFE; lo += 1) {
+        const code = (hi << 8) | lo;
+        const r = ranges.find((x) => code >= x[1] && code <= x[2]);
+        if (!r) continue;
+        try {
+          const ch = dec.decode(new Uint8Array([hi, lo]));
+          if (ch && ch.length === 1 && /\p{Script=Han}/u.test(ch)) map.set(ch, r[0]);
+        } catch (e) { /* noop */ }
+      }
+    }
+  }
+  PY_INITIALS = map;
+  return map;
+}
+
+function pinyinInitials(text) {
+  const map = buildPinyinInitials();
+  let out = '';
+  for (const ch of String(text || '')) {
+    if (/\p{Script=Han}/u.test(ch)) out += map.get(ch) || '';
+    else if (/[a-z0-9]/i.test(ch)) out += ch.toLowerCase();
+  }
+  return out;
+}
+
+/** 统一搜索：文件名、相对路径、别名、拼音首字母 */
+function matchesExternalQuery(f, query) {
+  const q = String(query || '').trim().toLowerCase();
+  if (!q) return true;
+  const name = path.basename(f.abs);
+  const alias = (f.aliases || []).join(' ');
+  const hay = (f.rel + ' ' + name + ' ' + alias).toLowerCase();
+  if (hay.includes(q)) return true;
+  if (/^[a-z0-9]+$/.test(q)) {
+    return pinyinInitials(f.rel + ' ' + name + ' ' + alias).includes(q);
+  }
+  return false;
 }
 
 /** 从 YAML frontmatter 提取 aliases / alias（支持行内数组与块状列表） */
@@ -3154,7 +3214,7 @@ class ExternalFilesModal extends obsidian.Modal {
     });
     const searchWrap = head.createDiv({ cls: 'ev-files-search' });
     const search = searchWrap.createEl('input', {
-      type: 'search', placeholder: tr('搜索文件名、路径或别名…'),
+      type: 'search', placeholder: tr('搜索文件名、路径、别名或拼音首字母…'),
     });
     search.value = this.query || '';
     search.addEventListener('input', () => {
@@ -3216,10 +3276,7 @@ class ExternalFilesModal extends obsidian.Modal {
   filtered() {
     const q = String(this.query || '').trim().toLowerCase();
     if (!q) return this.files;
-    return this.files.filter((f) =>
-      f.rel.toLowerCase().includes(q) ||
-      path.basename(f.abs).toLowerCase().includes(q) ||
-      (f.aliases || []).some((a) => String(a).toLowerCase().includes(q)));
+    return this.files.filter((f) => matchesExternalQuery(f, q));
   }
 
   /** 只重建列表，让搜索框保持焦点与输入法状态 */
@@ -3921,7 +3978,7 @@ class ExternalVaultView extends obsidian.ItemView {
     el.addClass('ev-panel');
     const head = el.createDiv({ cls: 'ev-panel-head' });
     const search = head.createEl('input', {
-      type: 'search', placeholder: tr('搜索文件名、路径或别名…'),
+      type: 'search', placeholder: tr('搜索文件名、路径、别名或拼音首字母…'),
     });
     search.value = this.query;
     search.addEventListener('input', () => {
@@ -3941,10 +3998,7 @@ class ExternalVaultView extends obsidian.ItemView {
     if (!this.listEl) return;
     this.listEl.empty();
     const q = String(this.query || '').trim().toLowerCase();
-    const rows = q ? this.files.filter((f) =>
-      f.rel.toLowerCase().includes(q) ||
-      path.basename(f.abs).toLowerCase().includes(q) ||
-      (f.aliases || []).some((a) => String(a).toLowerCase().includes(q))) : this.files;
+    const rows = q ? this.files.filter((f) => matchesExternalQuery(f, q)) : this.files;
     if (!rows.length) {
       this.listEl.createDiv({
         cls: 'ev-panel-empty',
