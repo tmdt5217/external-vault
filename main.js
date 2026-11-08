@@ -181,6 +181,10 @@ const EN = {
   '最后修改于': 'Modified ',
   '创建于': 'Created ',
   '新建笔记': 'New note',
+  '打开库外文件': 'Open external file',
+  '打开面板': 'Open panel',
+  '打开附件目录': 'Open attachments folder',
+  '复制路径': 'Copy path',
   '新建文件夹': 'New folder',
   '文件夹名称': 'Folder name',
   '排序': 'Sort',
@@ -1619,17 +1623,17 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
           if (fn) item.onClick(() => this.guard(fn));
         });
       };
-      add('打开External Vault', 'lucide-folder-open', () => this.openExternalFilesModal({ mode: 'open' }));
-      add('打开库外文件面板', 'lucide-panel-right', () => this.activateExternalPanel());
-      add('打开附件目录', 'lucide-image', () => this.revealExternalAssets());
-      add('新建库外MD', 'lucide-file-plus', () => this.openNewNoteModal());
-      add('复制External Vault路径', 'lucide-copy', async () => {
-        await navigator.clipboard.writeText(mdDir);
-        if (this.settings.showNotice) new obsidian.Notice('已复制：' + mdDir);
-      });
+      add('打开库外文件', 'lucide-file-search', () => this.openExternalFilesModal({ mode: 'open' }));
+      add('打开面板', 'lucide-panel-right', () => this.activateExternalPanel());
+      add('打开附件目录', 'lucide-folder-open', () => this.revealExternalAssets());
+      add('新建笔记', 'lucide-file-plus', () => this.openNewNoteModal());
       add('管理库外文件…', 'lucide-files', () => this.openExternalFilesModal());
       add('清理孤儿附件…', 'lucide-trash-2', () => this.openOrphanAssetsModal());
       add('撤销上一次移动', 'lucide-undo-2', () => this.undoLastMove());
+      add('复制路径', 'lucide-copy', async () => {
+        await navigator.clipboard.writeText(mdDir);
+        if (this.settings.showNotice) new obsidian.Notice('已复制：' + mdDir);
+      });
       menu.addSeparator();
       const notes = listExternalMdFiles(mdDir, this.settings.ribbonMaxNotes);
       if (!notes.length) {
