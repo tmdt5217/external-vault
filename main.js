@@ -4414,7 +4414,6 @@ class ExternalVaultView extends obsidian.ItemView {
       b.addEventListener('click', fn);
     };
     addIcon('lucide-file-plus', tr('新建笔记'), () => this.plugin.guard(() => this.plugin.openNewNoteModal()));
-    addIcon('lucide-folder-plus', tr('新建文件夹'), () => this.plugin.guard(() => this.plugin.createExternalFolder()));
     addIcon('lucide-arrow-down-up', tr('排序'), () => {
       this.sortBy = this.sortBy === 'name' ? 'mtime' : 'name';
       this.renderList();
