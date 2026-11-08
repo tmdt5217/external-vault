@@ -1,7 +1,7 @@
 'use strict';
 
 /*
- * external-file-image-pxm  v1.8.1
+ * external-file-image-pxm  v1.9.0
  *
  * 用途：Obsidian 1.14+ 编辑「仓库外的 Markdown 文件」时：
  *   1) 命令「新建库外 Markdown 文件」→ 在「库外 MD 目录」里创建 .md 并尝试打开
@@ -779,70 +779,35 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     this.setupRibbon();
     this.addSettingTab(new ExternalFileImageSettingTab(this.app, this));
 
+    // ---- 命令面板：所有功能统一用「库外文件：」前缀，输入这四个字即可看到全部 ----
     this.addCommand({
       id: 'new-external-note',
-      name: '新建库外 Markdown 文件',
+      name: '库外文件：新建 Markdown',
       callback: () => { Promise.resolve(this.openNewNoteModal()).catch((err) => this.reportError(err)); },
     });
-
-    // Ribbon 按钮的命令面板兜底；菜单里也可直接进入这两项
     this.addCommand({
       id: 'open-external-vault',
-      name: '打开 External Vault（菜单）',
+      name: '库外文件：打开 External Vault 菜单',
       callback: () => { this.showExternalVaultMenu(null); },
     });
     this.addCommand({
-      id: 'reveal-external-vault',
-      name: '在文件管理器中打开 External Vault 文件夹',
-      callback: () => this.guard(() => this.revealExternalVault()),
-    });
-
-    this.addCommand({
-      id: 'transfer-in-current',
-      name: '转入库：当前库外文件（含附件）',
-      callback: () => this.guard(() => this.transferCurrent('in')),
+      id: 'open-latest-external-note',
+      name: '库外文件：打开最近编辑的笔记',
+      callback: () => this.guard(() => this.openLatestExternalMd()),
     });
     this.addCommand({
-      id: 'transfer-out-current',
-      name: '移出库：当前库内笔记（含附件）',
-      callback: () => this.guard(() => this.transferCurrent('out')),
+      id: 'manage-external-files',
+      name: '库外文件：查看全部 / 批量删除',
+      callback: () => this.guard(() => this.openExternalFilesModal()),
     });
     this.addCommand({
-      id: 'transfer-in-folder',
-      name: '转入库：库外 MD 目录全部 MD（含附件）',
-      callback: () => this.guard(() => this.transferFolder('in')),
-    });
-    this.addCommand({
-      id: 'transfer-out-folder',
-      name: '移出库：当前笔记所在库内文件夹全部 MD（含附件）',
-      callback: () => this.guard(() => this.transferFolder('out')),
-    });
-
-    // 与右键菜单等价的命令入口；某些版本若不触发 file-menu / leaf-menu 仍可用
-    this.addCommand({
-      id: 'context-move-out-current',
-      name: '右键动作：移出 Vault（当前库内笔记，连附件）',
-      callback: () => this.guard(() => {
-        const f = this.app.workspace.getActiveFile();
-        if (!f || !isMdFileObject(f)) throw new Error('请先打开一个库内 Markdown 笔记');
-        return this.contextMoveOut(f);
-      }),
-    });
-    this.addCommand({
-      id: 'context-move-in-current',
-      name: '右键动作：移入 Vault（当前库外文件，连附件）',
-      callback: () => this.guard(() => {
-        const ctx = this.activeExternalContext();
-        if (!ctx || !ctx.file) throw new Error('当前不是「打开仓库外的文件…」打开的库外 MD');
-        const abs = ctx.file;
-        return this.contextMoveIn({
-          path: 'file:' + abs, extension: 'md', getRealPath: () => abs,
-        });
-      }),
+      id: 'insert-external-link',
+      name: '库外文件：插入相对链接（可多选）',
+      callback: () => this.guard(() => this.insertExternalLink()),
     });
     this.addCommand({
       id: 'delete-external-note',
-      name: '右键动作：删除当前库外 MD（含附件）',
+      name: '库外文件：删除当前库外 MD（含附件）',
       callback: () => this.guard(() => {
         const ctx = this.activeExternalContext();
         if (!ctx || !ctx.file) throw new Error('当前不是「打开仓库外的文件…」打开的库外 MD');
@@ -852,33 +817,93 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
         });
       }),
     });
+
     this.addCommand({
-      id: 'manage-external-files',
-      name: '库外文件：查看全部并批量删除（含附件）',
-      callback: () => this.guard(() => this.openExternalFilesModal()),
+      id: 'transfer-in-current',
+      name: '库外文件：移入 Vault（当前文件，含附件）',
+      callback: () => this.guard(() => this.transferCurrent('in')),
     });
     this.addCommand({
-      id: 'insert-external-link',
-      name: '插入链接：指向库外文件（相对路径）',
-      callback: () => this.guard(() => this.insertExternalLink()),
+      id: 'transfer-out-current',
+      name: '库外文件：移出 Vault（当前笔记，含附件）',
+      callback: () => this.guard(() => this.transferCurrent('out')),
+    });
+    this.addCommand({
+      id: 'transfer-in-folder',
+      name: '库外文件：移入 Vault（整个库外目录，含附件）',
+      callback: () => this.guard(() => this.transferFolder('in')),
+    });
+    this.addCommand({
+      id: 'transfer-out-folder',
+      name: '库外文件：移出 Vault（当前笔记所在文件夹，含附件）',
+      callback: () => this.guard(() => this.transferFolder('out')),
+    });
+    this.addCommand({
+      id: 'context-move-out-current',
+      name: '库外文件：移出 Vault（右键动作，含附件）',
+      callback: () => this.guard(() => {
+        const f = this.app.workspace.getActiveFile();
+        if (!f || !isMdFileObject(f)) throw new Error('请先打开一个库内 Markdown 笔记');
+        return this.contextMoveOut(f);
+      }),
+    });
+    this.addCommand({
+      id: 'context-move-in-current',
+      name: '库外文件：移入 Vault（右键动作，含附件）',
+      callback: () => this.guard(() => {
+        const ctx = this.activeExternalContext();
+        if (!ctx || !ctx.file) throw new Error('当前不是「打开仓库外的文件…」打开的库外 MD');
+        const abs = ctx.file;
+        return this.contextMoveIn({
+          path: 'file:' + abs, extension: 'md', getRealPath: () => abs,
+        });
+      }),
+    });
+
+    this.addCommand({
+      id: 'reveal-external-vault',
+      name: '库外文件：在文件管理器中打开 MD 目录',
+      callback: () => this.guard(() => this.revealExternalVault()),
+    });
+    this.addCommand({
+      id: 'reveal-external-assets',
+      name: '库外文件：在文件管理器中打开附件目录',
+      callback: () => this.guard(() => this.revealExternalAssets()),
+    });
+    this.addCommand({
+      id: 'copy-external-vault-path',
+      name: '库外文件：复制 External Vault 路径',
+      callback: () => this.guard(async () => {
+        const dir = this.externalMdDir();
+        await navigator.clipboard.writeText(dir);
+        new obsidian.Notice('已复制：' + dir, 4000);
+      }),
+    });
+    this.addCommand({
+      id: 'copy-external-assets-path',
+      name: '库外文件：复制附件目录路径',
+      callback: () => this.guard(async () => {
+        const dir = this.externalAssetDir();
+        await navigator.clipboard.writeText(dir);
+        new obsidian.Notice('已复制：' + dir, 4000);
+      }),
     });
 
     this.addCommand({
       id: 'fix-wiki-image-links',
-      name: '修复：当前库外 MD 里的图片链接',
+      name: '库外文件：修复当前笔记的图片链接',
       callback: () => this.guard(() => this.fixWikiImageLinks()),
     });
-
     this.addCommand({
       id: 'diagnose-external-file',
-      name: '诊断：复制当前库外文件信息',
+      name: '库外文件：诊断当前库外文件',
       callback: () => { this.diagnose().catch((err) => this.reportError(err)); },
     });
 
     this.patchOpenLinkText();
     this.setupExternalLinkRendering();
 
-    console.log(LOG, 'loaded v1.8.1', 'md=', this.mdRel(), 'assets=', this.assetRel(),
+    console.log(LOG, 'loaded v1.9.0', 'md=', this.mdRel(), 'assets=', this.assetRel(),
       'TExternalFile=', !!(obsidian.TExternalFile));
   }
 
