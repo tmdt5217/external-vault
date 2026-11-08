@@ -131,12 +131,29 @@ span.cm-hmd-internal-link.ev-external-link .cm-underline,
    行高、缩进、hover、选中态全部由主题决定，和左侧文件列表保持一致 */
 .ev-panel-list { padding: 2px 0; }
 /* 悬停灰框：部分主题只在文件浏览器容器内生效，这里按同样的变量显式补上 */
+.ev-panel .nav-folder-children { padding-left: 16px; }
 .ev-panel .nav-file-title,
 .ev-panel .nav-folder-title {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 8px;
+  min-height: 28px;
   border-radius: var(--radius-s, 6px);
-  padding: 3px 8px;
-  min-height: 24px;
+  font-size: var(--nav-item-size, 13px);
 }
+.ev-panel .nav-folder-collapse-indicator {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  color: var(--text-muted);
+}
+.ev-panel .nav-folder-collapse-indicator svg { width: 14px; height: 14px; }
+/* 根级文件与文件夹名对齐（给箭头留出位置） */
+.ev-panel .nav-files-container > .nav-file > .nav-file-title { padding-left: 24px; }
 .ev-panel .nav-file-title:hover,
 .ev-panel .nav-folder-title:hover,
 .ev-panel .tree-item-self:hover {
