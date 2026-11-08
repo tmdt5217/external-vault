@@ -226,6 +226,10 @@ body .ev-panel .nav-file-title.is-active::after {
   font-weight: 700;
   color: var(--text-normal);
 }
+/* 用自定义类表示选中，避免命中主题的 .is-active 规则 */
+.ev-panel .nav-file-title.ev-active {
+  background-color: var(--nav-item-background-active, var(--background-modifier-hover));
+}
 .ev-panel .nav-file-title:hover,
 .ev-panel .nav-folder-title:hover,
 .ev-panel .tree-item-self:hover {
