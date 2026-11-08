@@ -1,7 +1,7 @@
 'use strict';
 
 /*
- * external-vault-pxm  v1.10.6
+ * external-vault  v1.10.7
  *
  * 用途：Obsidian 1.14+ 编辑「仓库外的 Markdown 文件」时：
  *   1) 命令「新建库外 Markdown 文件」→ 在「库外 MD 目录」里创建 .md 并尝试打开
@@ -27,7 +27,7 @@
  * 右键菜单的两个动作有独立规则（不与命令面板的设置混用）：
  *   移出 Vault：MD → 库外 MD 目录；附件 → 库外附件目录
  *   移入 Vault：MD → 库根目录；附件 → 库内「默认附件文件夹」（读 app.json 的
- *               attachmentFolderPath，例如 Attachments_all）
+ *               attachmentFolderPath，例如 attachments）
  *   1.15 起库外文件是 obsidian.TExternalFile（继承 TFile），file.path 形如
  *   "file:/Users/me/Desktop/how.md"，getRealPath() 直接给出绝对路径；
  *   同时监听 workspace 的 file-menu / files-menu / leaf-menu 三个事件并去重，兼容 1.14。
@@ -47,7 +47,7 @@
  * 后 leaf.openFile(TFile)，彻底不走创建逻辑。
  *
  * 剪切语义（v1.4.1）：开启「转移后剪切源文件」时，源文件从原位置直接删除，
- * 不再生成 .pxm-transferred/<时间戳>/ 备份目录；删除前会校验所有目标文件已写盘，
+ * 不再生成额外备份目录；删除前会校验所有目标文件已写盘，
  * 校验不通过就保留源文件。设置里可选「剪切时移入系统废纸篓」（默认关）。
  * 命令面板默认只复制；右键菜单默认真剪切（否则「移出/移入」名不副实）。
  * 被其他笔记共用的附件只复制、保留原件，避免弄断别的笔记。
@@ -71,14 +71,14 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-const LOG = '[external-vault-pxm]';
+const LOG = '[external-vault]';
 
 /** 简易模式内置目录，全部相对 vault 根目录（../ = 与库同级） */
 const SIMPLE_MD_REL = '../External Vault';
 const SIMPLE_ASSET_REL = '../External Vault/attachments';
 
-/** 新建库外 MD 的默认模板：与核心 Templates 插件的「【YAML】★universal」一致 */
-const DEFAULT_NOTE_TEMPLATE_PATH = 'Attachments_all/template/【YAML】★universal.md';
+/** 新建库外 MD 的默认模板路径；留空则直接使用下面的内置 YAML，不依赖任何库内文件 */
+const DEFAULT_NOTE_TEMPLATE_PATH = '';
 const DEFAULT_NOTE_TEMPLATE_TEXT = '---\ncategory: \ntags: \naliases: \nstars: \n来源:\n---\n\n\n\n\n';
 
 const DEFAULT_SETTINGS = {
@@ -386,7 +386,7 @@ function attachmentFolderSetting(app) {
  *   "/"       = 库根目录
  *   "./"      = 与笔记同目录
  *   "./sub"   = 笔记目录下的 sub/
- *   "Attachments_all" = 库根下的 Attachments_all/
+ *   "attachments" = 库根下的 attachments/
  *   没配置时回退到 <noteDir>/<fallbackSub>。
  */
 function resolveDefaultAttachmentFolder(app, noteDir, fallbackSub) {
@@ -719,7 +719,7 @@ async function listMarkdownFiles(dir, recursive, maxDepth) {
 }
 
 /**
- * 真剪切：把源文件从原位置移除，不再生成 .pxm-transferred 备份目录。
+ * 真剪切：把源文件从原位置移除，不再生成额外备份目录。
  * cutUseTrash 开启时优先交给系统废纸篓（可找回），失败再退回直接删除。
  * 返回 { removed, trashed, failed }；删不掉的文件留在原处，由调用方在摘要里报出来。
  */
@@ -904,7 +904,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     this.patchFirstLinkpathDest();
     this.setupExternalLinkRendering();
 
-    console.log(LOG, 'loaded v1.10.6', 'md=', this.mdRel(), 'assets=', this.assetRel(),
+    console.log(LOG, 'loaded v1.10.7', 'md=', this.mdRel(), 'assets=', this.assetRel(),
       'TExternalFile=', !!(obsidian.TExternalFile));
   }
 
@@ -1139,7 +1139,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
         else if (action === 'latest') this.guard(() => this.openLatestExternalMd());
         else this.showExternalVaultMenu(evt);
       });
-      if (el && typeof el.addClass === 'function') el.addClass('pxm-ribbon-external-vault');
+      if (el && typeof el.addClass === 'function') el.addClass('ev-ribbon-external-vault');
       const onCtx = (evt) => { evt.preventDefault(); this.showExternalVaultMenu(evt); };
       if (el && typeof el.addEventListener === 'function') el.addEventListener('contextmenu', onCtx);
       this.ribbonEl = el;
@@ -1319,7 +1319,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
   patchOpenLinkText() {
     try {
       const ws = this.app.workspace;
-      if (!ws || typeof ws.openLinkText !== 'function' || ws.__pxmExternalLinkPatched) return;
+      if (!ws || typeof ws.openLinkText !== 'function' || ws.__evExternalLinkPatched) return;
       const orig = ws.openLinkText.bind(ws);
       this._origOpenLinkText = orig;
       ws.openLinkText = (linktext, sourcePath, newLeaf, openViewState) => {
@@ -1327,12 +1327,12 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
         if (abs) return this.openExternalMd(abs);
         return orig(linktext, sourcePath, newLeaf, openViewState);
       };
-      ws.__pxmExternalLinkPatched = true;
+      ws.__evExternalLinkPatched = true;
       this.register(() => {
         try {
-          if (!ws.__pxmExternalLinkPatched) return;
+          if (!ws.__evExternalLinkPatched) return;
           ws.openLinkText = orig;
-          delete ws.__pxmExternalLinkPatched;
+          delete ws.__evExternalLinkPatched;
         } catch (e) { /* noop */ }
       });
       this.dbg('openLinkText 已接管库外链接');
@@ -1341,7 +1341,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
 
   /**
    * 库外链接的渲染：
-   * 1) 保留 internal-link，只附加 pxm-external-link 做视觉区分——这样 Obsidian 仍会
+   * 1) 保留 internal-link，只附加 ev-external-link 做视觉区分——这样 Obsidian 仍会
    *    发出 hover-link 事件，Hover Editor / 原生预览才能弹出真实内容。
    * 2) 配合 patchFirstLinkpathDest，把库外目标解析成 TExternalFile。
    * 3) 编辑视图用 CodeMirror 装饰器做同样的标记。
@@ -1357,8 +1357,8 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
           if (!href) continue;
           const abs = this.externalTargetForLink(href, ctx.sourcePath);
           if (!abs) continue;
-          a.classList.add('pxm-external-link');
-          a.setAttribute('data-pxm-abs', abs);
+          a.classList.add('ev-external-link');
+          a.setAttribute('data-ev-abs', abs);
           a.setAttribute('title', '库外文件：' + abs);
         }
       } catch (e) { this.dbg('标记库外链接失败', e.message); }
@@ -1367,9 +1367,9 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     // 2) 阅读视图点击：由插件打开，源文件里仍是相对链接
     this.registerDomEvent(document, 'click', (e) => {
       const t = e.target;
-      const a = t && typeof t.closest === 'function' ? t.closest('a.pxm-external-link') : null;
+      const a = t && typeof t.closest === 'function' ? t.closest('a.ev-external-link') : null;
       if (!a) return;
-      const abs = a.getAttribute('data-pxm-abs') ||
+      const abs = a.getAttribute('data-ev-abs') ||
         this.externalTargetForLink(a.getAttribute('data-href') || a.getAttribute('href'), this.activeSourcePath());
       if (!abs) return;
       e.preventDefault();
@@ -1382,7 +1382,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       const cmView = require('@codemirror/view');
       const cmState = require('@codemirror/state');
       const self = this;
-      const mark = cmView.Decoration.mark({ class: 'pxm-external-link' });
+      const mark = cmView.Decoration.mark({ class: 'ev-external-link' });
       const plugin = cmView.ViewPlugin.fromClass(class {
         constructor(view) { this.decorations = this.build(view); }
         update(update) {
@@ -1423,7 +1423,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       if (!href) return;
       const abs = this.externalTargetForLink(href, this.activeSourcePath());
       if (!abs) return;
-      el.classList.add('pxm-external-link');
+      el.classList.add('ev-external-link');
     }, true);
 
     // 5) Live Preview 兜底：定期扫描当前编辑器，给命中库外的链接补 class
@@ -1441,7 +1441,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
   patchFirstLinkpathDest() {
     try {
       const mc = this.app.metadataCache;
-      if (!mc || typeof mc.getFirstLinkpathDest !== 'function' || mc.__pxmExternalResolvePatched) return;
+      if (!mc || typeof mc.getFirstLinkpathDest !== 'function' || mc.__evExternalResolvePatched) return;
       const orig = mc.getFirstLinkpathDest.bind(mc);
       const cache = new Map();
       mc.getFirstLinkpathDest = (linkpath, sourcePath) => {
@@ -1465,12 +1465,12 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
         } catch (e) { /* noop */ }
         return hit;
       };
-      mc.__pxmExternalResolvePatched = true;
+      mc.__evExternalResolvePatched = true;
       this.register(() => {
         try {
-          if (!mc.__pxmExternalResolvePatched) return;
+          if (!mc.__evExternalResolvePatched) return;
           mc.getFirstLinkpathDest = orig;
-          delete mc.__pxmExternalResolvePatched;
+          delete mc.__evExternalResolvePatched;
         } catch (e) { /* noop */ }
       });
       this.dbg('getFirstLinkpathDest 已接管库外链接');
@@ -1500,7 +1500,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       }
       if (!raw) continue;
       if (!this.externalTargetForLink(raw, sourcePath)) continue;
-      for (const el of links) el.classList.add('pxm-external-link');
+      for (const el of links) el.classList.add('ev-external-link');
     }
   }
 
@@ -1716,8 +1716,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
   wikiImageSearchDirs(ctx) {
     const targetDir = this.imageDirFor(ctx);
     const dirs = [targetDir, ctx.dir,
-      path.join(ctx.dir, 'images'), path.join(ctx.dir, 'assets'),
-      path.join(ctx.dir, 'Attachments_all')].filter(Boolean);
+      path.join(ctx.dir, 'images'), path.join(ctx.dir, 'assets')].filter(Boolean);
     const vRoot = vaultRoot(this.app);
     if (vRoot) {
       let cfg = null;
@@ -1730,7 +1729,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       if (cfg) {
         dirs.push(/^\.{1,2}\//.test(cfg) ? path.resolve(ctx.dir, cfg) : path.resolve(vRoot, cfg));
       }
-      for (const n of ['Attachments_all', 'attachments', 'Attachments', 'assets', 'images', '附件']) {
+      for (const n of ['attachments', 'Attachments', 'assets', 'images', '附件']) {
         dirs.push(path.join(vRoot, n));
       }
       dirs.push(vRoot);
@@ -2129,7 +2128,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
    *                      且此时不再触发 file-menu。
    *   leaf-menu  → 标签页右键兜底（某些版本可能不触发 file-menu）。
    * 同一个 Menu 对象用 WeakSet 去重；若两个事件都触发，后到的多选数组
-   * 通过 __pxmUpdateMoveOut 把已添加条目的目标升级为数量更多的一组。
+   * 通过 __evUpdateMoveOut 把已添加条目的目标升级为数量更多的一组。
    */
   registerContextMenus() {
     const outMenus = new WeakSet();
@@ -2149,7 +2148,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       const targets = vaultMdTargets(rawFiles, this.app);
       if (!targets.length) return;
       if (outMenus.has(menu)) {
-        if (typeof menu.__pxmUpdateMoveOut === 'function') menu.__pxmUpdateMoveOut(targets);
+        if (typeof menu.__evUpdateMoveOut === 'function') menu.__evUpdateMoveOut(targets);
         return;
       }
       outMenus.add(menu);
@@ -2158,7 +2157,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       // 先挂上更新器：某些版本 addItem 的回调可能是延迟执行的，
       // 这样 files-menu 后到时也能把目标升级成多选，且条目渲染时读到最新 chosen
       try {
-        menu.__pxmUpdateMoveOut = (next) => {
+        menu.__evUpdateMoveOut = (next) => {
           if (!next || next.length <= chosen.length) return;
           chosen = next;
           if (itemRef && typeof itemRef.setTitle === 'function') {
@@ -2561,7 +2560,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       } catch (e) { return String(e && e.message ? e.message : e); }
     };
     const out = {
-      plugin: 'external-vault-pxm',
+      plugin: 'external-vault',
       apiVersion: obsidian.apiVersion || null,
       hasView: !!view,
       candidateViews: views.length,
@@ -2965,7 +2964,7 @@ class TransferConfirmModal extends obsidian.Modal {
 
     new obsidian.Setting(el)
       .setName('转移后剪切源文件（删除原件）')
-      .setDesc('开启后源文件从原位置直接删除，不再生成 .pxm-transferred 备份目录，不可撤销；关闭则只复制')
+      .setDesc('开启后源文件从原位置直接删除，不再生成额外备份目录，不可撤销；关闭则只复制')
       .addToggle((t) => t.setValue(this.move).onChange((v) => { this.move = v; }));
 
     const buttons = el.createDiv({ cls: 'ev-buttons' });
@@ -3200,7 +3199,7 @@ class ExternalFileImageSettingTab extends obsidian.PluginSettingTab {
 
     new obsidian.Setting(el)
       .setName('移入 / 移出后剪切源文件（删除原件）')
-      .setDesc('默认开 = 真正剪切，源文件从原位置直接删除，不生成 .pxm-transferred 备份目录；关闭则只复制。想留后路可开启下面的「剪切时移入系统废纸篓」')
+      .setDesc('默认开 = 真正剪切，源文件从原位置直接删除，不生成额外备份目录；关闭则只复制。想留后路可开启下面的「剪切时移入系统废纸篓」')
       .addToggle((t) => t.setValue(this.plugin.settings.contextMenuMoveSource)
         .onChange((v) => save('contextMenuMoveSource', v)));
 
@@ -3271,7 +3270,7 @@ class ExternalFileImageSettingTab extends obsidian.PluginSettingTab {
     const tplMode = this.plugin.settings.noteTemplateMode || 'file';
     new obsidian.Setting(el)
       .setName('模板来源')
-      .setDesc('默认套用库里的「【YAML】★universal」；可换成别的模板文件，或直接写自定义内容')
+      .setDesc('默认套用内置 YAML frontmatter 模板；可换成库内模板文件，或直接写自定义内容')
       .addDropdown((d) => d
         .addOption('file', '模板文件（默认）')
         .addOption('text', '自定义内容')
@@ -3284,7 +3283,7 @@ class ExternalFileImageSettingTab extends obsidian.PluginSettingTab {
         .setName('模板文件路径')
         .setDesc('相对 vault 根目录，也可填绝对路径；留空或读不到时用内置默认 YAML。模板里可用 {{title}}、{{filename}}、{{date}}、{{date:YYYY-MM-DD}}、{{time}}')
         .addText((t) => t
-          .setPlaceholder(DEFAULT_NOTE_TEMPLATE_PATH)
+          .setPlaceholder('（留空使用内置 YAML）')
           .setValue(this.plugin.settings.noteTemplatePath || '')
           .onChange((v) => save('noteTemplatePath', v)));
     }

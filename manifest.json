@@ -1,9 +1,9 @@
 {
-  "id": "external-vault-pxm",
-  "name": "External Vault_PXM",
-  "version": "1.10.6",
+  "id": "external-vault",
+  "name": "External Vault",
+  "version": "1.10.7",
   "minAppVersion": "1.14.0",
   "description": "Edit Markdown notes outside your vault: paste images with portable relative paths, move notes with their attachments in or out, and link them from inside the vault.",
-  "author": "pxm",
+  "author": "Peng Xiuming",
   "isDesktopOnly": true
 }

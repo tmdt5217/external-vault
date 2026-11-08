@@ -1,4 +1,4 @@
-# External Vault_PXM
+# External Vault
 
 在 Obsidian 中直接编辑**仓库外**的 Markdown 笔记：粘贴或拖入图片时自动保存到库外附件目录，并写入正确的相对路径；同时提供库内与库外之间的一键搬运，笔记和附件一起走、链接自动重写。
 
@@ -30,7 +30,7 @@ An Obsidian plugin for editing Markdown notes **outside your vault**: paste or d
 
 - **社区插件商店**：上架后可在 Obsidian 的「第三方插件 → 浏览」中搜索安装。
 - **手动安装**：从 Releases 下载 `main.js`、`manifest.json`、`styles.css`，放入
-  `<vault>/.obsidian/plugins/external-vault-pxm/`，然后在 Obsidian 中启用。
+  `<vault>/.obsidian/plugins/external-vault/`，然后在 Obsidian 中启用。
 
 ## 使用
 
@@ -102,7 +102,7 @@ An Obsidian plugin for editing Markdown notes **outside your vault**: paste or d
 
 ## English
 
-**External Vault_PXM** lets you edit Markdown notes that live outside your vault:
+**External Vault** lets you edit Markdown notes that live outside your vault:
 
 - Paste or drop images into an external note and get a correct relative path; attachments are stored in your external attachment folder.
 - Create external notes from a template (file or inline text) with `{{title}}`, `{{filename}}`, `{{date}}`, `{{date:FORMAT}}`, and `{{time}}`.

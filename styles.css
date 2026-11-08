@@ -1,4 +1,4 @@
-/* external-vault-pxm —— 新建库外 MD 的弹窗 */
+/* external-vault —— 新建库外 MD 的弹窗 */
 
 .ev-preview,
 .ev-settings-preview {
@@ -56,10 +56,10 @@ textarea.ev-template-textarea {
 }
 
 /* Ribbon「打开 External Vault」按钮：轻微上浮，和原生按钮保持同一套配色 */
-.pxm-ribbon-external-vault {
+.ev-ribbon-external-vault {
   transition: transform 120ms ease;
 }
-.pxm-ribbon-external-vault:hover {
+.ev-ribbon-external-vault:hover {
   transform: translateY(-1px);
 }
 
@@ -74,10 +74,10 @@ textarea.ev-template-textarea {
 [data-href^="../"] .cm-link,
 [data-href^="../"] .cm-url,
 [data-href^="../"] .cm-hmd-internal-link,
-a.pxm-external-link,
-.pxm-external-link,
-.cm-hmd-internal-link.pxm-external-link,
-.cm-link.pxm-external-link {
+a.ev-external-link,
+.ev-external-link,
+.cm-hmd-internal-link.ev-external-link,
+.cm-link.ev-external-link {
   color: #e05252 !important;
   text-decoration: none !important;
   border-bottom: none !important;
@@ -85,24 +85,24 @@ a.pxm-external-link,
 }
 [data-href^="../"]::after,
 [href^="../"]::after,
-.pxm-external-link::after,
-.cm-hmd-internal-link.pxm-external-link::after,
-.cm-link.pxm-external-link::after {
+.ev-external-link::after,
+.cm-hmd-internal-link.ev-external-link::after,
+.cm-link.ev-external-link::after {
   content: none !important;
 }
 [data-href^="../"]:hover,
 [href^="../"]:hover,
-a.pxm-external-link:hover,
-.cm-hmd-internal-link.pxm-external-link:hover,
-.cm-link.pxm-external-link:hover {
+a.ev-external-link:hover,
+.cm-hmd-internal-link.ev-external-link:hover,
+.cm-link.ev-external-link:hover {
   color: #e05252 !important;
   text-decoration: none !important;
 }
 /* Live Preview：覆盖 Obsidian 用 CSS 变量控制的链接颜色与下划线 */
-span.cm-hmd-internal-link.pxm-external-link,
-span.cm-hmd-internal-link.pxm-external-link .cm-underline,
-.pxm-external-link,
-.pxm-external-link .cm-underline {
+span.cm-hmd-internal-link.ev-external-link,
+span.cm-hmd-internal-link.ev-external-link .cm-underline,
+.ev-external-link,
+.ev-external-link .cm-underline {
   --link-color: #e05252;
   --link-color-hover: #e05252;
   --link-decoration: none;
