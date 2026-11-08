@@ -67,9 +67,11 @@ textarea.efi-template-textarea {
    .view-header-title-parent.mod-external-file { } */
 
 /* 库外文件链接：与库内链接区分 */
-.pxm-external-link {
-  color: var(--color-orange, var(--text-warning));
-  text-decoration: none;
+.pxm-external-link,
+.cm-hmd-internal-link.pxm-external-link,
+.cm-link.pxm-external-link {
+  color: var(--color-orange, var(--text-warning)) !important;
+  text-decoration: none !important;
   border-bottom: 1px dashed currentColor;
   background-image: none;
 }
@@ -80,8 +82,10 @@ textarea.efi-template-textarea {
   vertical-align: super;
   opacity: 0.85;
 }
-.pxm-external-link:hover {
-  color: var(--color-orange, var(--text-warning));
+.pxm-external-link:hover,
+.cm-hmd-internal-link.pxm-external-link:hover,
+.cm-link.pxm-external-link:hover {
+  color: var(--color-orange, var(--text-warning)) !important;
   border-bottom-style: solid;
 }
 

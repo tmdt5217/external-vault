@@ -1,7 +1,7 @@
 'use strict';
 
 /*
- * external-file-image-pxm  v1.8.0
+ * external-file-image-pxm  v1.8.1
  *
  * 用途：Obsidian 1.14+ 编辑「仓库外的 Markdown 文件」时：
  *   1) 命令「新建库外 Markdown 文件」→ 在「库外 MD 目录」里创建 .md 并尝试打开
@@ -878,7 +878,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     this.patchOpenLinkText();
     this.setupExternalLinkRendering();
 
-    console.log(LOG, 'loaded v1.8.0', 'md=', this.mdRel(), 'assets=', this.assetRel(),
+    console.log(LOG, 'loaded v1.8.1', 'md=', this.mdRel(), 'assets=', this.assetRel(),
       'TExternalFile=', !!(obsidian.TExternalFile));
   }
 
@@ -1321,6 +1321,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
    * 3) 编辑视图的链接仍是 internal-link，悬停时拦住冒泡，避免 Hover Editor 误判。
    */
   setupExternalLinkRendering() {
+    // 1) 阅读视图：改成真正的外部链接，并去掉 data-href，Hover Editor 不会再按内部链接解析
     this.registerMarkdownPostProcessor((el, ctx) => {
       try {
         if (!ctx || !ctx.sourcePath || String(ctx.sourcePath).startsWith('file:')) return;
@@ -1333,38 +1334,81 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
           a.classList.remove('internal-link');
           a.classList.add('external-link', 'pxm-external-link');
           a.setAttribute('data-pxm-abs', abs);
+          a.removeAttribute('data-href');
           a.setAttribute('href', 'file://' + abs.split(path.sep).join('/'));
           a.setAttribute('title', '库外文件：' + abs);
         }
       } catch (e) { this.dbg('标记库外链接失败', e.message); }
     });
 
+    // 2) 阅读视图点击：由插件打开，源文件里仍是相对链接
     this.registerDomEvent(document, 'click', (e) => {
       const t = e.target;
       const a = t && typeof t.closest === 'function' ? t.closest('a.pxm-external-link') : null;
       if (!a) return;
-      const abs = a.getAttribute('data-pxm-abs');
+      const abs = a.getAttribute('data-pxm-abs') ||
+        this.externalTargetForLink(a.getAttribute('data-href') || a.getAttribute('href'), this.activeSourcePath());
       if (!abs) return;
       e.preventDefault();
       e.stopPropagation();
       this.guard(() => this.openExternalMd(abs));
     }, true);
 
+    // 3) 编辑视图（Live Preview）：CodeMirror 装饰器给库外链接持久加 class
+    try {
+      const cmView = require('@codemirror/view');
+      const cmState = require('@codemirror/state');
+      const self = this;
+      const mark = cmView.Decoration.mark({ class: 'pxm-external-link' });
+      const plugin = cmView.ViewPlugin.fromClass(class {
+        constructor(view) { this.decorations = this.build(view); }
+        update(update) {
+          if (update.docChanged || update.viewportChanged) {
+            this.decorations = this.build(update.view);
+          }
+        }
+        build(view) {
+          const builder = new cmState.RangeSetBuilder();
+          const sourcePath = self.activeSourcePath();
+          if (!sourcePath || sourcePath.startsWith('file:')) return builder.finish();
+          const re = /\[[^\]]*\]\((<[^>]+>|[^)\s]+)\)/g;
+          for (const range of view.visibleRanges) {
+            const text = view.state.sliceDoc(range.from, range.to);
+            let m;
+            while ((m = re.exec(text))) {
+              const target = m[1].replace(/^<|>$/g, '');
+              if (!self.externalTargetForLink(target, sourcePath)) continue;
+              const start = range.from + m.index;
+              builder.add(start, start + m[0].length, mark);
+            }
+          }
+          return builder.finish();
+        }
+      }, { decorations: (v) => v.decorations });
+      this.registerEditorExtension(plugin);
+    } catch (e) { this.dbg('编辑视图链接装饰器不可用', e.message); }
+
+    // 4) 编辑视图悬停：拦住 Hover Editor / 原生预览的「未创建」误判
     this.registerDomEvent(document, 'mouseover', (e) => {
       const t = e.target;
-      const a = t && typeof t.closest === 'function' ? t.closest('a.internal-link') : null;
+      if (!t || typeof t.closest !== 'function') return;
+      const a = t.closest('a.internal-link, a.cm-hmd-internal-link, a.cm-link, a[data-href]');
       if (!a) return;
-      let sourcePath = '';
-      try {
-        const f = this.app.workspace.getActiveFile();
-        sourcePath = f ? f.path : '';
-      } catch (err) { /* noop */ }
       const abs = this.externalTargetForLink(
-        a.getAttribute('data-href') || a.getAttribute('href'), sourcePath);
+        a.getAttribute('data-href') || a.getAttribute('href'), this.activeSourcePath());
       if (!abs) return;
       a.classList.add('pxm-external-link');
       e.stopPropagation();
+      if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
     }, true);
+  }
+
+  /** 当前活动笔记的 vault 相对路径，供链接解析使用 */
+  activeSourcePath() {
+    try {
+      const f = this.app.workspace.getActiveFile();
+      return f && f.path ? f.path : '';
+    } catch (e) { return ''; }
   }
 
   /**
