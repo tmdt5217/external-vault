@@ -142,7 +142,14 @@ span.cm-hmd-internal-link.ev-external-link .cm-underline,
 .ev-panel-row:hover,
 .ev-panel-folder:hover { background: var(--nav-item-background-hover, var(--background-modifier-hover)); }
 .ev-panel-row.is-active { background: var(--nav-item-background-active, var(--background-modifier-hover)); }
-.ev-panel-arrow { width: 12px; font-size: 10px; color: var(--text-muted); }
+.ev-panel-arrow {
+  width: 16px;
+  flex: none;
+  font-size: 14px;
+  line-height: 1;
+  text-align: center;
+  color: var(--text-muted);
+}
 .ev-panel-icon {
   display: flex;
   width: 16px;

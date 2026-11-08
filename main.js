@@ -4292,9 +4292,7 @@ class ExternalVaultView extends obsidian.ItemView {
       const child = node.dirs.get(name);
       const folder = container.createDiv({ cls: 'ev-panel-folder' });
       folder.style.paddingLeft = (8 + depth * 14) + 'px';
-      const arrow = folder.createSpan({ cls: 'ev-panel-arrow', text: '▾' });
-      const icon = folder.createSpan({ cls: 'ev-panel-icon' });
-      if (obsidian.setIcon) obsidian.setIcon(icon, 'lucide-folder');
+      const arrow = folder.createSpan({ cls: 'ev-panel-arrow', text: '⌄' });
       folder.createSpan({ cls: 'ev-panel-folder-name', text: name });
       const children = container.createDiv({ cls: 'ev-panel-children' });
       this.renderNode(child, depth + 1, children);
@@ -4302,7 +4300,7 @@ class ExternalVaultView extends obsidian.ItemView {
       folder.addEventListener('click', () => {
         open = !open;
         children.style.display = open ? '' : 'none';
-        arrow.textContent = open ? '▾' : '▸';
+        arrow.textContent = open ? '⌄' : '›';
       });
     }
     const files = node.files.slice().sort((a, b) =>
