@@ -4384,6 +4384,20 @@ class ExternalVaultView extends obsidian.ItemView {
   getIcon() { return 'lucide-folder-open'; }
 
   async onOpen() {
+    // 按钮放到视图标题栏右侧，悬停时才显示（和系统文件浏览器一致）
+    this.addAction('file-plus', tr('新建笔记'), () => this.plugin.guard(() => this.plugin.openNewNoteModal()));
+    this.addAction('folder-plus', tr('新建文件夹'), () => this.plugin.guard(() => this.plugin.createExternalFolder()));
+    this.addAction('arrow-down-up', tr('排序'), () => {
+      this.sortBy = this.sortBy === 'name' ? 'mtime' : 'name';
+      this.renderList();
+    });
+    this.addAction('chevrons-up-down', tr('折叠 / 展开'), () => {
+      this.collapseAll = !this.collapseAll;
+      this.renderList();
+    });
+    this.addAction('refresh-cw', tr('刷新'), () => { this.refresh().catch(() => {}); });
+    this.addAction('folder-open', tr('打开 Finder'), () => this.plugin.guard(() => this.plugin.revealExternalVault()));
+    this.addAction('more-horizontal', tr('更多'), (e) => this.showPanelMenu(e));
     this.render();
     await this.refresh();
     this.registerEvent(this.app.workspace.on('file-open', () => {
@@ -4415,41 +4429,6 @@ class ExternalVaultView extends obsidian.ItemView {
         .then(() => this.renderList())
         .catch(() => this.renderList());
     });
-    const actions = head.createDiv({ cls: 'ev-panel-actions' });
-    const refreshBtn = actions.createEl('button', {
-      cls: 'clickable-icon ev-panel-btn',
-      attr: { 'aria-label': tr('刷新') },
-    });
-    if (obsidian.setIcon) obsidian.setIcon(refreshBtn, 'lucide-refresh-cw');
-    refreshBtn.addEventListener('click', () => { this.refresh().catch(() => {}); });
-    const finderBtn = actions.createEl('button', {
-      cls: 'clickable-icon ev-panel-btn',
-      attr: { 'aria-label': tr('打开 Finder') },
-    });
-    if (obsidian.setIcon) obsidian.setIcon(finderBtn, 'lucide-folder-open');
-    finderBtn.addEventListener('click', () => this.plugin.guard(() => this.plugin.revealExternalVault()));
-
-    const toolbar = el.createDiv({ cls: 'ev-panel-toolbar' });
-    const addIcon = (icon, label, fn) => {
-      const b = toolbar.createEl('button', {
-        cls: 'clickable-icon ev-panel-btn',
-        attr: { 'aria-label': label },
-      });
-      if (obsidian.setIcon) obsidian.setIcon(b, icon);
-      b.addEventListener('click', fn);
-    };
-    addIcon('lucide-file-plus', tr('新建笔记'), () => this.plugin.guard(() => this.plugin.openNewNoteModal()));
-    addIcon('lucide-folder-plus', tr('新建文件夹'), () => this.plugin.guard(() => this.plugin.createExternalFolder()));
-    addIcon('lucide-arrow-down-up', tr('排序'), () => {
-      this.sortBy = this.sortBy === 'name' ? 'mtime' : 'name';
-      this.renderList();
-    });
-    addIcon('lucide-chevrons-up-down', tr('折叠 / 展开'), () => {
-      this.collapseAll = !this.collapseAll;
-      this.renderList();
-    });
-    addIcon('lucide-more-horizontal', tr('更多'), (e) => this.showPanelMenu(e));
-
     this.listEl = el.createDiv({ cls: 'ev-panel-list nav-files-container' });
     this.renderList();
   }
