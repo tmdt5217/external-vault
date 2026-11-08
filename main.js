@@ -1954,8 +1954,9 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
           next = next.replace(/\[([^\]]*)\]\(([^)]+)\)/g, (m, text, href) => {
             try {
               const decoded = decodeURIComponent(href.replace(/^<|>$/g, ''));
-              const resolved = path.resolve(path.dirname(referrerAbs), decoded);
-              if (path.resolve(resolved) !== path.resolve(r.src)) return m;
+              // 按文件名匹配，不依赖相对路径从哪一层算起
+              const base = path.basename(decoded, path.extname(decoded));
+              if (base !== name) return m;
               const label = text && text !== name ? '|' + text : '';
               return '[[' + name + label + ']]';
             } catch (e) { return m; }
