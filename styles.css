@@ -67,8 +67,9 @@ textarea.efi-template-textarea {
    .view-header-title-parent.mod-external-file { } */
 
 /* 库外文件管理器（ExternalFilesModal） */
-.external-file-image-modal.efi-files-modal {
-  width: min(760px, 92vw);
+.modal.efi-files-modal {
+  width: min(620px, calc(100vw - 32px));
+  max-width: calc(100vw - 32px);
 }
 .efi-files-toolbar {
   display: flex;
@@ -89,6 +90,7 @@ textarea.efi-template-textarea {
 .efi-files-list {
   max-height: 46vh;
   overflow-y: auto;
+  overflow-x: hidden;
   border: 1px solid var(--background-modifier-border);
   border-radius: 8px;
 }
@@ -118,8 +120,11 @@ textarea.efi-template-textarea {
   white-space: nowrap;
 }
 .efi-files-meta {
-  flex: none;
+  flex: 0 1 auto;
+  max-width: 42%;
   margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
   color: var(--text-faint);
   font-size: var(--font-ui-smaller);
   white-space: nowrap;

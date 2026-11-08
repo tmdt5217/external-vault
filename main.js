@@ -1,7 +1,7 @@
 'use strict';
 
 /*
- * external-file-image-pxm  v1.6.0
+ * external-file-image-pxm  v1.6.1
  *
  * 用途：Obsidian 1.14+ 编辑「仓库外的 Markdown 文件」时：
  *   1) 命令「新建库外 Markdown 文件」→ 在「库外 MD 目录」里创建 .md 并尝试打开
@@ -877,7 +877,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
 
     this.patchOpenLinkText();
 
-    console.log(LOG, 'loaded v1.6.0', 'md=', this.mdRel(), 'assets=', this.assetRel(),
+    console.log(LOG, 'loaded v1.6.1', 'md=', this.mdRel(), 'assets=', this.assetRel(),
       'TExternalFile=', !!(obsidian.TExternalFile));
   }
 
@@ -2507,6 +2507,7 @@ class ExternalFilesModal extends obsidian.Modal {
   }
 
   async onOpen() {
+    try { this.modalEl.addClass('efi-files-modal'); } catch (e) { /* noop */ }
     this.render();
     await this.load();
   }
@@ -2537,7 +2538,6 @@ class ExternalFilesModal extends obsidian.Modal {
     const el = this.contentEl;
     el.empty();
     el.addClass('external-file-image-modal');
-    el.addClass('efi-files-modal');
     if (this.stage === 'confirm' && this.confirmData) {
       this.renderConfirm(el);
       return;
