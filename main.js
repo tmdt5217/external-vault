@@ -1924,6 +1924,63 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
    * - 库内 → 外：[[名字]] 改成 [名字](库外相对路径)
    * - 外 → 内：指向外部路径的 markdown 链接改回 [[名字]]
    */
+  /** 重命名库外文件，并同步改写引用它的链接 */
+  renameExternalFile(abs) {
+    const base = path.basename(abs);
+    new TextPromptModal(this.app, tr('重命名文件'), base, async (v) => {
+      const name = String(v || '').trim();
+      if (!name || name === base) return;
+      const dest = path.join(path.dirname(abs), name);
+      if (fs.existsSync(dest)) throw new Error('同名文件已存在：' + name);
+      await fs.promises.rename(abs, dest);
+      this._externalNameCache = null;
+      try { await this.rewriteLinksForRename(abs, dest); } catch (e) { this.dbg('重命名后改写链接失败', e.message); }
+      this.refreshExternalPanels();
+      new obsidian.Notice('已重命名为：' + name);
+    }, base).open();
+  }
+
+  /** 把引用旧文件名的链接改成新文件名 */
+  async rewriteLinksForRename(oldAbs, newAbs) {
+    const oldFile = path.basename(oldAbs);
+    const newFile = path.basename(newAbs);
+    const oldBase = path.basename(oldAbs, path.extname(oldAbs));
+    const newBase = path.basename(newAbs, path.extname(newAbs));
+    const vRoot = vaultRoot(this.app);
+    const targets = [];
+    for (const f of this.app.vault.getMarkdownFiles()) targets.push({ abs: path.resolve(vRoot, f.path), file: f });
+    try {
+      const entries = await this.listExternalEntries();
+      for (const e of entries) if (e.kind === 'md') targets.push({ abs: e.abs, file: null });
+    } catch (e) { /* noop */ }
+    const wikiRe = new RegExp('\\[\\[' + escapeRegExp(oldBase) + '(#[^\\]|]*)?(?:\\|([^\\]]*))?\\]\\]', 'g');
+    let changed = 0;
+    for (const t of targets) {
+      if (path.resolve(t.abs) === path.resolve(newAbs)) continue;
+      let content = '';
+      try { content = t.file ? await this.app.vault.read(t.file) : await fs.promises.readFile(t.abs, 'utf8'); }
+      catch (e) { continue; }
+      let next = content.replace(wikiRe, (m, hash, alias) =>
+        '[[' + newBase + (hash || '') + (alias ? '|' + alias : '') + ']]');
+      next = next.replace(/\[([^\]]*)\]\(([^)]+)\)/g, (m, text, href) => {
+        try {
+          const decoded = decodeURIComponent(href.replace(/^<|>$/g, ''));
+          if (path.basename(decoded) !== oldFile) return m;
+          const replaced = href.split(oldFile).join(newFile);
+          return '[' + text + '](' + replaced + ')';
+        } catch (e) { return m; }
+      });
+      if (next !== content) {
+        try {
+          if (t.file) await this.app.vault.process(t.file, () => next);
+          else await fs.promises.writeFile(t.abs, next, 'utf8');
+          changed += 1;
+        } catch (e) { /* noop */ }
+      }
+    }
+    return changed;
+  }
+
   /** 判断绝对路径是否在外部库的 MD / 附件目录内 */
   isInsideExternalVault(abs) {
     if (!abs) return false;
@@ -4626,12 +4683,12 @@ class ExternalFileImageSettingTab extends obsidian.PluginSettingTab {
 
 /** 简单的单行文本输入弹窗（新建文件夹用） */
 class TextPromptModal extends obsidian.Modal {
-  constructor(app, title, placeholder, onSubmit) {
+  constructor(app, title, placeholder, onSubmit, initial) {
     super(app);
     this.titleText = title;
     this.placeholder = placeholder || '';
     this.onSubmit = onSubmit;
-    this.value = '';
+    this.value = initial || '';
   }
 
   onOpen() {
@@ -4640,6 +4697,7 @@ class TextPromptModal extends obsidian.Modal {
     el.empty();
     const input = el.createEl('input', { type: 'text', placeholder: this.placeholder });
     input.style.width = '100%';
+    input.value = this.value;
     input.addEventListener('input', () => { this.value = input.value; });
     input.addEventListener('keydown', (e) => { if (e.key === 'Enter') this.submit(); });
     const row = el.createDiv({ cls: 'ev-buttons' });
