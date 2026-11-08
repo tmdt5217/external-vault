@@ -1422,6 +1422,29 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     return list.find((v) => v.id === this.settings.activeVaultId) || list[0];
   }
 
+  /** 移出 Vault 时选目标外部库：只有一个直接用，多个弹菜单 */
+  pickTargetVault() {
+    const list = this.externalVaultsList();
+    if (list.length <= 1) return Promise.resolve(list[0] || null);
+    if (!obsidian.Menu) return Promise.resolve(list[0]);
+    return new Promise((resolve) => {
+      const menu = new obsidian.Menu();
+      let done = false;
+      const finish = (v) => { if (done) return; done = true; resolve(v); };
+      for (const v of list) {
+        menu.addItem((item) => item
+          .setTitle(v.name)
+          .setIcon('lucide-folder')
+          .onClick(() => finish(v)));
+      }
+      menu.onHide(() => finish(null));
+      menu.showAtPosition({
+        x: Math.round((window.innerWidth || 1200) / 2),
+        y: Math.round((window.innerHeight || 800) / 3),
+      });
+    });
+  }
+
   /** 切换当前外部库并确保目录存在 */
   async setActiveVault(id) {
     this.settings.activeVaultId = id;
@@ -3096,9 +3119,11 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       if (!vRoot || !f.path || isExternalTFile(f)) return false;
       return srcSet.has(path.resolve(vRoot, String(f.path)));
     };
-    const mdDestDir = this.externalMdDir();
-    const assetDestDir = this.externalAssetDir();
-    if (!mdDestDir || !assetDestDir) throw new Error('拿不到库外目录，请检查插件设置');
+    const targetVault = await this.pickTargetVault();
+    if (!targetVault) return null; // 用户取消
+    const mdDestDir = resolveVaultRelative(this.app, targetVault.mdDir);
+    const assetDestDir = resolveVaultRelative(this.app, targetVault.assetDir);
+    if (!mdDestDir || !assetDestDir) throw new Error('拿不到目标外部库目录');
     const paths = {
       vRoot, mdDestDir, assetDestDir,
       relAssetDir: relativeFromMd(mdDestDir, assetDestDir),
