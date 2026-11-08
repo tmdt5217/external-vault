@@ -2150,10 +2150,14 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
   /** 判断绝对路径是否在外部库的 MD / 附件目录内 */
   isInsideExternalVault(abs) {
     if (!abs) return false;
+    const vRoot = vaultRoot(this.app);
+    if (!vRoot) return false;
+    // 外部库目录可能是相对 vault 根的路径，必须先按 vault 根解析
+    const around = (d) => (path.isAbsolute(d) ? d : path.resolve(vRoot, d));
     const p = path.resolve(abs);
     const dirs = [this.externalMdDir(), this.externalAssetDir()].filter(Boolean);
     return dirs.some((d) => {
-      const base = path.resolve(d);
+      const base = path.resolve(around(d));
       return p === base || p.startsWith(base + path.sep);
     });
   }
