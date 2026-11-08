@@ -4428,8 +4428,8 @@ class ExternalVaultView extends obsidian.ItemView {
     const left = header && header.querySelector('.view-header-left');
     if (left) { left.appendChild(bar); return; }
     if (header) { header.appendChild(bar); return; }
-    // 标题栏结构不可用时，回退到内容区顶部的折叠工具条
-    bar.className = 'ev-panel-toolbar-fallback';
+    // 侧边栏视图可能没有 .view-header，回退到内容区顶部常驻工具条
+    bar.className = 'ev-panel-toolbar-fallback is-visible';
     this.contentEl.prepend(bar);
   }
 
