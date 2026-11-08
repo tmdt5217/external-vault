@@ -81,6 +81,142 @@ const SIMPLE_ASSET_REL = '../External Vault/attachments';
 const DEFAULT_NOTE_TEMPLATE_PATH = '';
 const DEFAULT_NOTE_TEMPLATE_TEXT = '---\ncategory: \ntags: \naliases: \nstars: \n来源:\n---\n\n\n\n\n';
 
+// ---- 界面语言 -------------------------------------------------------------
+// 以中文原文为 key 的英文映射；未收录的文案在英文模式下回退中文。
+const EN = {
+  '库外文件图片 / 新建': 'External files: attachments & new notes',
+  '编辑库外 MD 时，粘贴 / 拖入的附件自动存进库外附件目录并插入相对路径；库内笔记行为不变。': 'When editing a Markdown file outside the vault, pasted or dropped attachments are saved to the external attachment folder with relative paths. Notes inside the vault are unaffected.',
+  '目录模式': 'Folder mode',
+  '选择方式': 'Configuration',
+  '简易：无需设置任何文件夹；自定义：自己填两个相对目录': 'Simple: no folders to configure. Custom: set two relative folders yourself.',
+  '简易（默认，无需设置）': 'Simple (default, no setup)',
+  '自定义两个目录': 'Custom (two folders)',
+  '所有目录都相对当前 vault 根目录填写，"../" 表示与库同级。当前库：': 'All folders are relative to the vault root. "../" means a sibling of the vault. Current vault: ',
+  '（未知）': '(unknown)',
+  '库外 MD 目录：': 'External notes folder: ',
+  '        → ': '        -> ',
+  '库外附件目录：': 'External attachments folder: ',
+  '插入的链接前缀：': 'Link prefix: ',
+  '库外放 MD 的目录': 'External notes folder',
+  '相对 vault 根，例如 ../External Vault；也可写多层，如 ../PBL/notes': 'Relative to the vault root, e.g. ../External Vault; nesting is allowed, e.g. ../PBL/notes',
+  '选择…': 'Choose…',
+  '库外放附件的目录': 'External attachments folder',
+  '相对 vault 根，例如 ../External Vault/attachments': 'Relative to the vault root, e.g. ../External Vault/attachments',
+  '「选择…」会把手选的绝对路径自动换算成相对 vault 根的写法；请选一个「里面至少有一个文件」的文件夹，空文件夹请直接手输。两个目录改动后，插入的链接前缀会自动重算。': '"Choose…" converts the selected absolute path into a vault-relative path. Pick a folder that contains at least one file; type empty folder paths manually. Link prefixes are recalculated when either folder changes.',
+  '简易模式固定使用与库同级的 External Vault/ 放 MD、External Vault/attachments/ 放附件；插件加载时自动创建，不需要选任何文件夹。': 'Simple mode always uses a sibling "External Vault/" for notes and "External Vault/attachments/" for attachments. They are created automatically when the plugin loads.',
+  '接管非图片附件': 'Handle non-image attachments',
+  '开启后拖入 PDF、docx、zip 等文件也存进附件目录并插入 [文件名](相对路径)；.md/.txt 等笔记类不接管': 'Also store dropped PDFs, docx, zip, etc. in the attachment folder and insert [name](relative path). Notes such as .md/.txt are not handled.',
+  '右键菜单：移出 / 移入 Vault': 'Context menus: move out of / into vault',
+  '库内笔记右键 →「移出 Vault」（支持多选）；库外标签页右键 →「移入 Vault」。附件随 MD 一起搬走并重写相对路径，笔记双链、网络图片不动。命令面板的「转入库 / 移出库」旧命令沿用固定默认规则。': 'Right-click an in-vault note to move it out (multi-select supported); right-click an external tab to move it in. Attachments move with the note and relative paths are rewritten. Wiki links and remote images are left untouched.',
+  '移出 Vault：MD → ': 'Move out: notes -> ',
+  '             附件 → ': '              attachments -> ',
+  '移入 Vault：MD → ': 'Move in: notes -> ',
+  '库内默认附件夹配置：': 'Vault default attachment folder: ',
+  '（未配置，回退 assets）': '(not set, falling back to assets)',
+  '\nTExternalFile 类：': '\nTExternalFile class: ',
+  '可用': 'available',
+  '不可用（走路径兜底）': 'unavailable (path fallback)',
+  '显示右键菜单项': 'Show context menu items',
+  '关掉后两个右键菜单里都不再出现本插件的条目': 'Hide this plugin from both context menus',
+  '移入 Vault：MD 目标文件夹': 'Move in: target note folder',
+  '相对 vault 根目录；留空 = 库根目录（默认）': 'Relative to the vault root; empty = vault root (default)',
+  '（库根目录）': '(vault root)',
+  '移入 Vault：附件放到库内默认附件文件夹': 'Move in: use the vault default attachment folder',
+  '读取 设置 → 文件与链接 → 默认附件位置（当前为 ': 'Reads Settings -> Files and links -> Default location for new attachments (currently ',
+  '）；关闭则放到目标 MD 目录下的 assets 子目录': '). When off, attachments go to an "assets" subfolder next to the note.',
+  '移入 / 移出后剪切源文件（删除原件）': 'Cut source files after moving (delete originals)',
+  '默认开 = 真正剪切，源文件从原位置直接删除，不生成额外备份目录；关闭则只复制。想留后路可开启下面的「剪切时移入系统废纸篓」': 'On = true cut: originals are deleted from the original location without extra backup folders. Off = copy only. Enable "Move cut files to system trash" below if you want a safety net.',
+  '剪切时移入系统废纸篓': 'Move cut files to system trash',
+  '默认关 = 直接从磁盘删除；开启后源文件移入系统废纸篓，可找回。对右键菜单和命令面板同时生效': 'Off = delete from disk. On = move originals to the system trash so they can be restored. Applies to both context menus and commands.',
+  '安全处理：删除源文件前会先确认所有目标文件已写盘；被其他笔记共用的附件只复制、保留原件。注意：移出 Vault 后库内其他笔记指向该笔记的 [[双链]] 会失效，直接删除不可撤销。': 'Safety: source files are deleted only after every target file is verified on disk. Attachments shared with other notes are copied, not deleted. Note: moving a note out of the vault breaks [[wiki links]] pointing to it, and deletion cannot be undone.',
+  'Ribbon 按钮：打开 External Vault': 'Ribbon button: open External Vault',
+  '左键默认弹出菜单，右键始终弹出完整菜单；目录路径见上方「目录模式」。': 'Left click opens the menu by default; right click always opens the full menu. Folder paths are shown under "Folder mode" above.',
+  '显示 Ribbon 按钮': 'Show ribbon button',
+  '开关即时生效，不必重载插件': 'Takes effect immediately; no reload needed',
+  '左键点击的动作': 'Left-click action',
+  '右键不受此项影响，始终弹出完整菜单': 'Right click is unaffected and always opens the full menu',
+  '弹出 External Vault 菜单（默认）': 'Open the External Vault menu (default)',
+  '直接在文件管理器中打开 External Vault': 'Reveal External Vault in the file manager',
+  '直接打开最近编辑的一篇库外 MD': 'Open the most recently edited external note',
+  '菜单里最多列几篇库外 MD': 'Maximum external notes in the menu',
+  '按修改时间倒序，只列库外 MD 目录当前层的文件': 'Newest first, only files in the top level of the external notes folder',
+  '10 篇': '10 notes',
+  '20 篇（默认）': '20 notes (default)',
+  '50 篇': '50 notes',
+  '200 篇': '200 notes',
+  '插入与新建': 'Linking & new notes',
+  '相对路径写法': 'Relative link style',
+  '默认尖括号：文件名含空格或中文时最稳妥，Obsidian / Typora / VS Code 都认': 'Angle brackets by default: safest for names with spaces or non-ASCII characters, understood by Obsidian, Typora and VS Code',
+  '尖括号 <...>（推荐）': 'Angle brackets <...> (recommended)',
+  '百分号编码（%20 等）': 'Percent-encoding (%20 etc.)',
+  '原样（文件名须无空格）': 'Plain (file names must not contain spaces)',
+  '拖入时保留原文件名': 'Keep original file names when dropping',
+  '关闭后所有图片统一命名为「Pasted image 时间戳」；重名自动加 -1、-2': 'When off, images are named "Pasted image <timestamp>"; duplicates get -1, -2',
+  '新建库外 MD 模板': 'Template for new external notes',
+  '模板来源': 'Template source',
+  '默认套用内置 YAML frontmatter 模板；可换成库内模板文件，或直接写自定义内容': 'Use the built-in YAML frontmatter by default; switch to a vault template file or inline text',
+  '模板文件（默认）': 'Template file (default)',
+  '自定义内容': 'Inline text',
+  '不用模板': 'No template',
+  '模板文件路径': 'Template file path',
+  '相对 vault 根目录，也可填绝对路径；留空或读不到时用内置默认 YAML。模板里可用 {{title}}、{{filename}}、{{date}}、{{date:YYYY-MM-DD}}、{{time}}': 'Relative to the vault root, or an absolute path. Empty or unreadable falls back to the built-in YAML. Supports {{title}}, {{filename}}, {{date}}, {{date:YYYY-MM-DD}}, {{time}}',
+  '（留空使用内置 YAML）': '(empty = built-in YAML)',
+  '自定义模板内容': 'Inline template text',
+  '新建库外 MD 的正文原样写入这里的内容；支持 {{title}}、{{filename}}、{{date}}、{{date:YYYY-MM-DD}}、{{time}}；留空 = 内置默认 YAML': 'Body text for new external notes. Supports {{title}}, {{filename}}, {{date}}, {{date:YYYY-MM-DD}}, {{time}}. Empty = built-in YAML.',
+  '不用模板时写入标题': 'Write a heading when no template is used',
+  '仅当「模板来源」选「不用模板」时生效：文件内容自动写一行「# 文件名」；模板模式不会追加标题': 'Only applies when Template source is "No template": adds a "# file name" line. Template modes do not add a heading.',
+  '显示成功提示': 'Show success notices',
+  '调试日志': 'Debug logging',
+  '在开发者控制台打印路径探测、保存位置等信息': 'Print path resolution and save locations to the developer console',
+  '故障排查': 'Troubleshooting',
+  '插图或右键菜单没生效时，运行命令「诊断：复制当前库外文件信息」，把剪贴板内容发来即可适配。': 'If attachments or context menus do not work, run "Diagnose current external file" and share the copied diagnostics.',
+  '语言': 'Language',
+  '界面语言；切换后建议重载插件（Cmd+R）以更新命令名': 'Interface language. Reload the plugin (Cmd+R) after switching to update command names.',
+  '跟随 Obsidian': 'Follow Obsidian',
+  // 命令
+  '库外文件：新建 Markdown': 'External files: New Markdown',
+  '库外文件：打开 External Vault 菜单': 'External files: Open External Vault menu',
+  '库外文件：打开最近编辑的笔记': 'External files: Open latest note',
+  '库外文件：查看全部 / 批量删除': 'External files: Browse / bulk delete',
+  '库外文件：插入相对链接（可多选）': 'External files: Insert relative links (multi-select)',
+  '库外文件：删除当前库外 MD（含附件）': 'External files: Delete current external note',
+  '库外文件：移入 Vault（当前文件，含附件）': 'External files: Move into vault (current file)',
+  '库外文件：移出 Vault（当前笔记，含附件）': 'External files: Move out of vault (current note)',
+  '库外文件：移入 Vault（整个库外目录，含附件）': 'External files: Move whole external folder into vault',
+  '库外文件：移出 Vault（当前笔记所在文件夹，含附件）': 'External files: Move current note folder out of vault',
+  '库外文件：移出 Vault（右键动作，含附件）': 'External files: Move out of vault (context action)',
+  '库外文件：移入 Vault（右键动作，含附件）': 'External files: Move into vault (context action)',
+  '库外文件：在文件管理器中打开 MD 目录': 'External files: Reveal notes folder',
+  '库外文件：在文件管理器中打开附件目录': 'External files: Reveal attachments folder',
+  '库外文件：复制 External Vault 路径': 'External files: Copy External Vault path',
+  '库外文件：复制附件目录路径': 'External files: Copy attachments folder path',
+  '库外文件：修复当前笔记的图片链接': 'External files: Fix image links in current note',
+  '库外文件：诊断当前库外文件': 'External files: Diagnose current external note',
+  // 菜单
+  '移出 Vault（含附件）': 'Move out of vault (with attachments)',
+  '移入 Vault（含附件）': 'Move into vault (with attachments)',
+  '删除库外 MD（含附件）': 'Delete external note (with attachments)',
+  ' 篇': ' notes',
+};
+
+let UI_LANG = 'zh';
+
+/** 取界面文案；英文模式未收录的条目回退中文 */
+function tr(s) {
+  return UI_LANG === 'en' ? (EN[s] || s) : s;
+}
+
+/** 决定界面语言：auto 时跟随 Obsidian */
+function detectLang(settings) {
+  const mode = settings && settings.language;
+  if (mode === 'en') return 'en';
+  if (mode === 'zh') return 'zh';
+  try {
+    const l = (obsidian.getLanguage && obsidian.getLanguage()) || '';
+    return /^zh/i.test(l) ? 'zh' : 'en';
+  } catch (e) { return 'zh'; }
+}
+
 const DEFAULT_SETTINGS = {
   mode: 'simple',                       // 'simple' 免配置 | 'custom' 自定义两个相对目录
   customMdDir: SIMPLE_MD_REL,           // 库外放 MD 的目录（相对 vault 根）
@@ -107,6 +243,7 @@ const DEFAULT_SETTINGS = {
   noteTemplateMode: 'text',             // text 内置/自定义内容 | file 模板文件 | none 不用模板
   noteTemplatePath: DEFAULT_NOTE_TEMPLATE_PATH, // 相对 vault 根，也接受绝对路径；留空用内置 YAML
   noteTemplateText: DEFAULT_NOTE_TEMPLATE_TEXT, // 自定义内容，支持 {{title}} / {{date}} 等变量
+  language: 'auto',                     // auto | zh | en
   showNotice: true,
   debug: false,
   // ---- 仅用于从 v1.2 及更早配置迁移，不再出现在设置面板 ----
@@ -762,6 +899,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
   async onload() {
     const raw = await this.loadData();
     this.settings = Object.assign({}, DEFAULT_SETTINGS, raw);
+    UI_LANG = detectLang(this.settings);
     this.migrateLegacyDirs(raw);
     this.ensureDirs();
 
@@ -782,32 +920,32 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     // ---- 命令面板：所有功能统一用「库外文件：」前缀，输入这四个字即可看到全部 ----
     this.addCommand({
       id: 'new-external-note',
-      name: '库外文件：新建 Markdown',
+      name: tr('库外文件：新建 Markdown'),
       callback: () => { Promise.resolve(this.openNewNoteModal()).catch((err) => this.reportError(err)); },
     });
     this.addCommand({
       id: 'open-external-vault',
-      name: '库外文件：打开 External Vault 菜单',
+      name: tr('库外文件：打开 External Vault 菜单'),
       callback: () => { this.showExternalVaultMenu(null); },
     });
     this.addCommand({
       id: 'open-latest-external-note',
-      name: '库外文件：打开最近编辑的笔记',
+      name: tr('库外文件：打开最近编辑的笔记'),
       callback: () => this.guard(() => this.openLatestExternalMd()),
     });
     this.addCommand({
       id: 'manage-external-files',
-      name: '库外文件：查看全部 / 批量删除',
+      name: tr('库外文件：查看全部 / 批量删除'),
       callback: () => this.guard(() => this.openExternalFilesModal()),
     });
     this.addCommand({
       id: 'insert-external-link',
-      name: '库外文件：插入相对链接（可多选）',
+      name: tr('库外文件：插入相对链接（可多选）'),
       callback: () => this.guard(() => this.insertExternalLink()),
     });
     this.addCommand({
       id: 'delete-external-note',
-      name: '库外文件：删除当前库外 MD（含附件）',
+      name: tr('库外文件：删除当前库外 MD（含附件）'),
       callback: () => this.guard(() => {
         const ctx = this.activeExternalContext();
         if (!ctx || !ctx.file) throw new Error('当前不是「打开仓库外的文件…」打开的库外 MD');
@@ -820,27 +958,27 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
 
     this.addCommand({
       id: 'transfer-in-current',
-      name: '库外文件：移入 Vault（当前文件，含附件）',
+      name: tr('库外文件：移入 Vault（当前文件，含附件）'),
       callback: () => this.guard(() => this.transferCurrent('in')),
     });
     this.addCommand({
       id: 'transfer-out-current',
-      name: '库外文件：移出 Vault（当前笔记，含附件）',
+      name: tr('库外文件：移出 Vault（当前笔记，含附件）'),
       callback: () => this.guard(() => this.transferCurrent('out')),
     });
     this.addCommand({
       id: 'transfer-in-folder',
-      name: '库外文件：移入 Vault（整个库外目录，含附件）',
+      name: tr('库外文件：移入 Vault（整个库外目录，含附件）'),
       callback: () => this.guard(() => this.transferFolder('in')),
     });
     this.addCommand({
       id: 'transfer-out-folder',
-      name: '库外文件：移出 Vault（当前笔记所在文件夹，含附件）',
+      name: tr('库外文件：移出 Vault（当前笔记所在文件夹，含附件）'),
       callback: () => this.guard(() => this.transferFolder('out')),
     });
     this.addCommand({
       id: 'context-move-out-current',
-      name: '库外文件：移出 Vault（右键动作，含附件）',
+      name: tr('库外文件：移出 Vault（右键动作，含附件）'),
       callback: () => this.guard(() => {
         const f = this.app.workspace.getActiveFile();
         if (!f || !isMdFileObject(f)) throw new Error('请先打开一个库内 Markdown 笔记');
@@ -849,7 +987,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     });
     this.addCommand({
       id: 'context-move-in-current',
-      name: '库外文件：移入 Vault（右键动作，含附件）',
+      name: tr('库外文件：移入 Vault（右键动作，含附件）'),
       callback: () => this.guard(() => {
         const ctx = this.activeExternalContext();
         if (!ctx || !ctx.file) throw new Error('当前不是「打开仓库外的文件…」打开的库外 MD');
@@ -862,17 +1000,17 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
 
     this.addCommand({
       id: 'reveal-external-vault',
-      name: '库外文件：在文件管理器中打开 MD 目录',
+      name: tr('库外文件：在文件管理器中打开 MD 目录'),
       callback: () => this.guard(() => this.revealExternalVault()),
     });
     this.addCommand({
       id: 'reveal-external-assets',
-      name: '库外文件：在文件管理器中打开附件目录',
+      name: tr('库外文件：在文件管理器中打开附件目录'),
       callback: () => this.guard(() => this.revealExternalAssets()),
     });
     this.addCommand({
       id: 'copy-external-vault-path',
-      name: '库外文件：复制 External Vault 路径',
+      name: tr('库外文件：复制 External Vault 路径'),
       callback: () => this.guard(async () => {
         const dir = this.externalMdDir();
         await navigator.clipboard.writeText(dir);
@@ -881,7 +1019,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     });
     this.addCommand({
       id: 'copy-external-assets-path',
-      name: '库外文件：复制附件目录路径',
+      name: tr('库外文件：复制附件目录路径'),
       callback: () => this.guard(async () => {
         const dir = this.externalAssetDir();
         await navigator.clipboard.writeText(dir);
@@ -891,12 +1029,12 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
 
     this.addCommand({
       id: 'fix-wiki-image-links',
-      name: '库外文件：修复当前笔记的图片链接',
+      name: tr('库外文件：修复当前笔记的图片链接'),
       callback: () => this.guard(() => this.fixWikiImageLinks()),
     });
     this.addCommand({
       id: 'diagnose-external-file',
-      name: '库外文件：诊断当前库外文件',
+      name: tr('库外文件：诊断当前库外文件'),
       callback: () => { this.diagnose().catch((err) => this.reportError(err)); },
     });
 
@@ -2178,7 +2316,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       seen.add(menu);
       return true;
     };
-    const outTitle = (n) => '移出 Vault（含附件）' + (n > 1 ? ' · ' + n + ' 篇' : '');
+    const outTitle = (n) => tr('移出 Vault（含附件）') + (n > 1 ? ' · ' + n + tr(' 篇') : '');
     /** rawFiles 可为单个 TFile（file-menu）或数组（files-menu） */
     const addMoveOut = (menu, rawFiles) => {
       if (!this.settings.contextMenuEnabled || !menu || typeof menu.addItem !== 'function') return;
@@ -2219,7 +2357,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       try {
         menu.addItem((item) => item
           .setSection('action')
-          .setTitle('移入 Vault（含附件）')
+          .setTitle(tr('移入 Vault（含附件）'))
           .setIcon('lucide-log-in')
           .onClick(() => this.guard(() => this.contextMoveIn(file))));
       } catch (e) { this.dbg('添加「移入 Vault」菜单项失败', e.message); }
@@ -2229,7 +2367,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       try {
         menu.addItem((item) => item
           .setSection('action')
-          .setTitle('删除库外 MD（含附件）')
+          .setTitle(tr('删除库外 MD（含附件）'))
           .setIcon('lucide-trash-2')
           .onClick(() => this.guard(() => this.promptDeleteExternalNote(file))));
       } catch (e) { this.dbg('添加「删除库外 MD」菜单项失败', e.message); }
@@ -2973,7 +3111,7 @@ class ExternalFilesModal extends obsidian.Modal {
 
   renderConfirm(el) {
     const { srcs, plan } = this.confirmData;
-    el.createEl('h2', { text: '确认删除库外 MD（含附件）' });
+    el.createEl('h2', { text: tr('确认删除库外 MD（含附件）') });
     const lines = [
       '将删除：' + srcs.length + ' 篇 Markdown',
       '将删除附件：' + plan.doomed.length + ' 个',
@@ -3142,26 +3280,41 @@ class ExternalFileImageSettingTab extends obsidian.PluginSettingTab {
       await this.plugin.saveData(this.plugin.settings);
     };
 
-    el.createEl('h2', { text: '库外文件图片 / 新建' });
-    el.createEl('p', {
-      cls: 'setting-item-description',
-      text: '编辑库外 MD 时，粘贴 / 拖入的附件自动存进库外附件目录并插入相对路径；库内笔记行为不变。',
-    });
-
-    new obsidian.Setting(el).setName('目录模式').setHeading();
+    el.createEl('h2', { text: tr('库外文件图片 / 新建') });
 
     new obsidian.Setting(el)
-      .setName('选择方式')
-      .setDesc('简易：无需设置任何文件夹；自定义：自己填两个相对目录')
+      .setName(tr('语言'))
+      .setDesc(tr('界面语言；切换后建议重载插件（Cmd+R）以更新命令名'))
       .addDropdown((d) => d
-        .addOption('simple', '简易（默认，无需设置）')
-        .addOption('custom', '自定义两个目录')
+        .addOption('auto', tr('跟随 Obsidian'))
+        .addOption('zh', '中文')
+        .addOption('en', 'English')
+        .setValue(this.plugin.settings.language || 'auto')
+        .onChange(async (v) => {
+          this.plugin.settings.language = v;
+          await this.plugin.saveData(this.plugin.settings);
+          UI_LANG = detectLang(this.plugin.settings);
+          this.display();
+        }));
+    el.createEl('p', {
+      cls: 'setting-item-description',
+      text: tr('编辑库外 MD 时，粘贴 / 拖入的附件自动存进库外附件目录并插入相对路径；库内笔记行为不变。'),
+    });
+
+    new obsidian.Setting(el).setName(tr('目录模式')).setHeading();
+
+    new obsidian.Setting(el)
+      .setName(tr('选择方式'))
+      .setDesc(tr('简易：无需设置任何文件夹；自定义：自己填两个相对目录'))
+      .addDropdown((d) => d
+        .addOption('simple', tr('简易（默认，无需设置）'))
+        .addOption('custom', tr('自定义两个目录'))
         .setValue(this.plugin.settings.mode)
         .onChange((v) => { save('mode', v).then(() => this.display()); }));
 
     el.createEl('p', {
       cls: 'setting-item-description',
-      text: '所有目录都相对当前 vault 根目录填写，"../" 表示与库同级。当前库：' + (vaultRoot(this.app) || '（未知）'),
+      text: tr('所有目录都相对当前 vault 根目录填写，"../" 表示与库同级。当前库：') + (vaultRoot(this.app) || tr('（未知）')),
     });
 
     const mdAbs = this.plugin.externalMdDir();
@@ -3169,24 +3322,24 @@ class ExternalFileImageSettingTab extends obsidian.PluginSettingTab {
     const relLink = (mdAbs && assetAbs) ? relativeFromMd(mdAbs, assetAbs) : '';
     const preview = el.createDiv({ cls: 'ev-settings-preview' });
     preview.textContent =
-      '库外 MD 目录：' + this.plugin.mdRel() + '\n' +
+      tr('库外 MD 目录：') + this.plugin.mdRel() + '\n' +
       '        → ' + (mdAbs || '?') + '\n' +
-      '库外附件目录：' + this.plugin.assetRel() + '\n' +
+      tr('库外附件目录：') + this.plugin.assetRel() + '\n' +
       '        → ' + (assetAbs || '?') + '\n' +
-      '插入的链接前缀：' + (relLink ? relLink + '/' : './');
+      tr('插入的链接前缀：') + (relLink ? relLink + '/' : './');
 
     if (this.plugin.settings.mode === 'custom') {
       let mdText;
       new obsidian.Setting(el)
-        .setName('库外放 MD 的目录')
-        .setDesc('相对 vault 根，例如 ../External Vault；也可写多层，如 ../PBL/notes')
+        .setName(tr('库外放 MD 的目录'))
+        .setDesc(tr('相对 vault 根，例如 ../External Vault；也可写多层，如 ../PBL/notes'))
         .addText((t) => {
           mdText = t;
           t.setPlaceholder(SIMPLE_MD_REL)
             .setValue(this.plugin.settings.customMdDir)
             .onChange((v) => save('customMdDir', v.trim()));
         })
-        .addButton((b) => b.setButtonText('选择…').onClick(() => {
+        .addButton((b) => b.setButtonText(tr('选择…')).onClick(() => {
           pickDirectory((dir) => {
             const v = this.toRelative(dir);
             mdText.setValue(v);
@@ -3196,15 +3349,15 @@ class ExternalFileImageSettingTab extends obsidian.PluginSettingTab {
 
       let assetText;
       new obsidian.Setting(el)
-        .setName('库外放附件的目录')
-        .setDesc('相对 vault 根，例如 ../External Vault/attachments')
+        .setName(tr('库外放附件的目录'))
+        .setDesc(tr('相对 vault 根，例如 ../External Vault/attachments'))
         .addText((t) => {
           assetText = t;
           t.setPlaceholder(SIMPLE_ASSET_REL)
             .setValue(this.plugin.settings.customAssetDir)
             .onChange((v) => save('customAssetDir', v.trim()));
         })
-        .addButton((b) => b.setButtonText('选择…').onClick(() => {
+        .addButton((b) => b.setButtonText(tr('选择…')).onClick(() => {
           pickDirectory((dir) => {
             const v = this.toRelative(dir);
             assetText.setValue(v);
@@ -3214,18 +3367,18 @@ class ExternalFileImageSettingTab extends obsidian.PluginSettingTab {
 
       el.createEl('p', {
         cls: 'setting-item-description',
-        text: '「选择…」会把手选的绝对路径自动换算成相对 vault 根的写法；请选一个「里面至少有一个文件」的文件夹，空文件夹请直接手输。两个目录改动后，插入的链接前缀会自动重算。',
+        text: tr('「选择…」会把手选的绝对路径自动换算成相对 vault 根的写法；请选一个「里面至少有一个文件」的文件夹，空文件夹请直接手输。两个目录改动后，插入的链接前缀会自动重算。'),
       });
     } else {
       el.createEl('p', {
         cls: 'setting-item-description',
-        text: '简易模式固定使用与库同级的 External Vault/ 放 MD、External Vault/attachments/ 放附件；插件加载时自动创建，不需要选任何文件夹。',
+        text: tr('简易模式固定使用与库同级的 External Vault/ 放 MD、External Vault/attachments/ 放附件；插件加载时自动创建，不需要选任何文件夹。'),
       });
     }
 
     new obsidian.Setting(el)
-      .setName('接管非图片附件')
-      .setDesc('开启后拖入 PDF、docx、zip 等文件也存进附件目录并插入 [文件名](相对路径)；.md/.txt 等笔记类不接管')
+      .setName(tr('接管非图片附件'))
+      .setDesc(tr('开启后拖入 PDF、docx、zip 等文件也存进附件目录并插入 [文件名](相对路径)；.md/.txt 等笔记类不接管'))
       .addToggle((t) => t.setValue(this.plugin.settings.handleOtherAttachments)
         .onChange((v) => save('handleOtherAttachments', v)));
 
@@ -3233,10 +3386,10 @@ class ExternalFileImageSettingTab extends obsidian.PluginSettingTab {
     // 这些命令仍按 DEFAULT_SETTINGS 的固定默认值运行；唯一对右键菜单也生效的
     // 「剪切时移入系统废纸篓」已移到下面的「右键菜单」组。
 
-    new obsidian.Setting(el).setName('右键菜单：移出 / 移入 Vault').setHeading();
+    new obsidian.Setting(el).setName(tr('右键菜单：移出 / 移入 Vault')).setHeading();
     el.createEl('p', {
       cls: 'setting-item-description',
-      text: '库内笔记右键 →「移出 Vault」（支持多选）；库外标签页右键 →「移入 Vault」。附件随 MD 一起搬走并重写相对路径，笔记双链、网络图片不动。命令面板的「转入库 / 移出库」旧命令沿用固定默认规则。',
+      text: tr('库内笔记右键 →「移出 Vault」（支持多选）；库外标签页右键 →「移入 Vault」。附件随 MD 一起搬走并重写相对路径，笔记双链、网络图片不动。命令面板的「转入库 / 移出库」旧命令沿用固定默认规则。'),
     });
 
     const vRoot = vaultRoot(this.app);
@@ -3256,128 +3409,128 @@ class ExternalFileImageSettingTab extends obsidian.PluginSettingTab {
     })();
     const menuPreview = el.createDiv({ cls: 'ev-settings-preview' });
     menuPreview.textContent =
-      '移出 Vault：MD → ' + (mdAbs || '?') + '\n' +
-      '             附件 → ' + (assetAbs || '?') + '\n' +
-      '移入 Vault：MD → ' + inMdDir + '\n' +
-      '             附件 → ' + inAsset.dir + '\n' +
-      '库内默认附件夹配置：' + (attachmentFolderSetting(this.app) || '（未配置，回退 assets）') +
-      '\nTExternalFile 类：' + (obsidian.TExternalFile ? '可用' : '不可用（走路径兜底）');
+      tr('移出 Vault：MD → ') + (mdAbs || '?') + '\n' +
+      tr('             附件 → ') + (assetAbs || '?') + '\n' +
+      tr('移入 Vault：MD → ') + inMdDir + '\n' +
+      tr('             附件 → ') + inAsset.dir + '\n' +
+      tr('库内默认附件夹配置：') + (attachmentFolderSetting(this.app) || tr('（未配置，回退 assets）')) +
+      '\nTExternalFile 类：' + (obsidian.TExternalFile ? tr('可用') : tr('不可用（走路径兜底）'));
 
     new obsidian.Setting(el)
-      .setName('显示右键菜单项')
-      .setDesc('关掉后两个右键菜单里都不再出现本插件的条目')
+      .setName(tr('显示右键菜单项'))
+      .setDesc(tr('关掉后两个右键菜单里都不再出现本插件的条目'))
       .addToggle((t) => t.setValue(this.plugin.settings.contextMenuEnabled)
         .onChange((v) => save('contextMenuEnabled', v)));
 
     new obsidian.Setting(el)
-      .setName('移入 Vault：MD 目标文件夹')
-      .setDesc('相对 vault 根目录；留空 = 库根目录（默认）')
-      .addText((t) => t.setPlaceholder('（库根目录）')
+      .setName(tr('移入 Vault：MD 目标文件夹'))
+      .setDesc(tr('相对 vault 根目录；留空 = 库根目录（默认）'))
+      .addText((t) => t.setPlaceholder(tr('（库根目录）'))
         .setValue(this.plugin.settings.contextMenuVaultMdFolder)
         .onChange((v) => save('contextMenuVaultMdFolder', v.trim()).then(() => this.display())));
 
     new obsidian.Setting(el)
-      .setName('移入 Vault：附件放到库内默认附件文件夹')
-      .setDesc('读取 设置 → 文件与链接 → 默认附件位置（当前为 ' +
-        (attachmentFolderSetting(this.app) || '/') + '）；关闭则放到目标 MD 目录下的 assets 子目录')
+      .setName(tr('移入 Vault：附件放到库内默认附件文件夹'))
+      .setDesc(tr('读取 设置 → 文件与链接 → 默认附件位置（当前为 ') +
+        (attachmentFolderSetting(this.app) || '/') + tr('）；关闭则放到目标 MD 目录下的 assets 子目录'))
       .addToggle((t) => t.setValue(this.plugin.settings.contextMenuUseDefaultAttachmentFolder)
         .onChange((v) => save('contextMenuUseDefaultAttachmentFolder', v).then(() => this.display())));
 
     new obsidian.Setting(el)
-      .setName('移入 / 移出后剪切源文件（删除原件）')
-      .setDesc('默认开 = 真正剪切，源文件从原位置直接删除，不生成额外备份目录；关闭则只复制。想留后路可开启下面的「剪切时移入系统废纸篓」')
+      .setName(tr('移入 / 移出后剪切源文件（删除原件）'))
+      .setDesc(tr('默认开 = 真正剪切，源文件从原位置直接删除，不生成额外备份目录；关闭则只复制。想留后路可开启下面的「剪切时移入系统废纸篓」'))
       .addToggle((t) => t.setValue(this.plugin.settings.contextMenuMoveSource)
         .onChange((v) => save('contextMenuMoveSource', v)));
 
     new obsidian.Setting(el)
-      .setName('剪切时移入系统废纸篓')
-      .setDesc('默认关 = 直接从磁盘删除；开启后源文件移入系统废纸篓，可找回。对右键菜单和命令面板同时生效')
+      .setName(tr('剪切时移入系统废纸篓'))
+      .setDesc(tr('默认关 = 直接从磁盘删除；开启后源文件移入系统废纸篓，可找回。对右键菜单和命令面板同时生效'))
       .addToggle((t) => t.setValue(this.plugin.settings.cutUseTrash)
         .onChange((v) => save('cutUseTrash', v)));
 
     el.createEl('p', {
       cls: 'setting-item-description',
-      text: '安全处理：删除源文件前会先确认所有目标文件已写盘；被其他笔记共用的附件只复制、保留原件。注意：移出 Vault 后库内其他笔记指向该笔记的 [[双链]] 会失效，直接删除不可撤销。',
+      text: tr('安全处理：删除源文件前会先确认所有目标文件已写盘；被其他笔记共用的附件只复制、保留原件。注意：移出 Vault 后库内其他笔记指向该笔记的 [[双链]] 会失效，直接删除不可撤销。'),
     });
 
-    new obsidian.Setting(el).setName('Ribbon 按钮：打开 External Vault').setHeading();
+    new obsidian.Setting(el).setName(tr('Ribbon 按钮：打开 External Vault')).setHeading();
     el.createEl('p', {
       cls: 'setting-item-description',
-      text: '左键默认弹出菜单，右键始终弹出完整菜单；目录路径见上方「目录模式」。',
+      text: tr('左键默认弹出菜单，右键始终弹出完整菜单；目录路径见上方「目录模式」。'),
     });
 
     new obsidian.Setting(el)
-      .setName('显示 Ribbon 按钮')
-      .setDesc('开关即时生效，不必重载插件')
+      .setName(tr('显示 Ribbon 按钮'))
+      .setDesc(tr('开关即时生效，不必重载插件'))
       .addToggle((t) => t.setValue(this.plugin.settings.ribbonEnabled)
         .onChange((v) => save('ribbonEnabled', v).then(() => this.plugin.refreshRibbon())));
 
     new obsidian.Setting(el)
-      .setName('左键点击的动作')
-      .setDesc('右键不受此项影响，始终弹出完整菜单')
+      .setName(tr('左键点击的动作'))
+      .setDesc(tr('右键不受此项影响，始终弹出完整菜单'))
       .addDropdown((d) => d
-        .addOption('menu', '弹出 External Vault 菜单（默认）')
-        .addOption('reveal', '直接在文件管理器中打开 External Vault')
-        .addOption('latest', '直接打开最近编辑的一篇库外 MD')
+        .addOption('menu', tr('弹出 External Vault 菜单（默认）'))
+        .addOption('reveal', tr('直接在文件管理器中打开 External Vault'))
+        .addOption('latest', tr('直接打开最近编辑的一篇库外 MD'))
         .setValue(this.plugin.settings.ribbonClickAction)
         .onChange((v) => save('ribbonClickAction', v)));
 
     new obsidian.Setting(el)
-      .setName('菜单里最多列几篇库外 MD')
-      .setDesc('按修改时间倒序，只列库外 MD 目录当前层的文件')
+      .setName(tr('菜单里最多列几篇库外 MD'))
+      .setDesc(tr('按修改时间倒序，只列库外 MD 目录当前层的文件'))
       .addDropdown((d) => d
-        .addOption('10', '10 篇')
-        .addOption('20', '20 篇（默认）')
-        .addOption('50', '50 篇')
-        .addOption('200', '200 篇')
+        .addOption('10', tr('10 篇'))
+        .addOption('20', tr('20 篇（默认）'))
+        .addOption('50', tr('50 篇'))
+        .addOption('200', tr('200 篇'))
         .setValue(String(this.plugin.settings.ribbonMaxNotes))
         .onChange((v) => save('ribbonMaxNotes', Number(v))));
 
-    new obsidian.Setting(el).setName('插入与新建').setHeading();
+    new obsidian.Setting(el).setName(tr('插入与新建')).setHeading();
 
     new obsidian.Setting(el)
-      .setName('相对路径写法')
-      .setDesc('默认尖括号：文件名含空格或中文时最稳妥，Obsidian / Typora / VS Code 都认')
+      .setName(tr('相对路径写法'))
+      .setDesc(tr('默认尖括号：文件名含空格或中文时最稳妥，Obsidian / Typora / VS Code 都认'))
       .addDropdown((d) => d
-        .addOption('angle', '尖括号 <...>（推荐）')
-        .addOption('encode', '百分号编码（%20 等）')
-        .addOption('plain', '原样（文件名须无空格）')
+        .addOption('angle', tr('尖括号 <...>（推荐）'))
+        .addOption('encode', tr('百分号编码（%20 等）'))
+        .addOption('plain', tr('原样（文件名须无空格）'))
         .setValue(this.plugin.settings.linkStyle)
         .onChange((v) => save('linkStyle', v)));
 
     new obsidian.Setting(el)
-      .setName('拖入时保留原文件名')
-      .setDesc('关闭后所有图片统一命名为「Pasted image 时间戳」；重名自动加 -1、-2')
+      .setName(tr('拖入时保留原文件名'))
+      .setDesc(tr('关闭后所有图片统一命名为「Pasted image 时间戳」；重名自动加 -1、-2'))
       .addToggle((t) => t.setValue(this.plugin.settings.keepOriginalName)
         .onChange((v) => save('keepOriginalName', v)));
 
-    new obsidian.Setting(el).setName('新建库外 MD 模板').setHeading();
+    new obsidian.Setting(el).setName(tr('新建库外 MD 模板')).setHeading();
 
     const tplMode = this.plugin.settings.noteTemplateMode || 'file';
     new obsidian.Setting(el)
-      .setName('模板来源')
-      .setDesc('默认套用内置 YAML frontmatter 模板；可换成库内模板文件，或直接写自定义内容')
+      .setName(tr('模板来源'))
+      .setDesc(tr('默认套用内置 YAML frontmatter 模板；可换成库内模板文件，或直接写自定义内容'))
       .addDropdown((d) => d
-        .addOption('file', '模板文件（默认）')
-        .addOption('text', '自定义内容')
-        .addOption('none', '不用模板')
+        .addOption('file', tr('模板文件（默认）'))
+        .addOption('text', tr('自定义内容'))
+        .addOption('none', tr('不用模板'))
         .setValue(tplMode)
         .onChange(async (v) => { await save('noteTemplateMode', v); this.display(); }));
 
     if (tplMode === 'file') {
       new obsidian.Setting(el)
-        .setName('模板文件路径')
-        .setDesc('相对 vault 根目录，也可填绝对路径；留空或读不到时用内置默认 YAML。模板里可用 {{title}}、{{filename}}、{{date}}、{{date:YYYY-MM-DD}}、{{time}}')
+        .setName(tr('模板文件路径'))
+        .setDesc(tr('相对 vault 根目录，也可填绝对路径；留空或读不到时用内置默认 YAML。模板里可用 {{title}}、{{filename}}、{{date}}、{{date:YYYY-MM-DD}}、{{time}}'))
         .addText((t) => t
-          .setPlaceholder('（留空使用内置 YAML）')
+          .setPlaceholder(tr('（留空使用内置 YAML）'))
           .setValue(this.plugin.settings.noteTemplatePath || '')
           .onChange((v) => save('noteTemplatePath', v)));
     }
 
     if (tplMode === 'text') {
       new obsidian.Setting(el)
-        .setName('自定义模板内容')
-        .setDesc('新建库外 MD 的正文原样写入这里的内容；支持 {{title}}、{{filename}}、{{date}}、{{date:YYYY-MM-DD}}、{{time}}；留空 = 内置默认 YAML')
+        .setName(tr('自定义模板内容'))
+        .setDesc(tr('新建库外 MD 的正文原样写入这里的内容；支持 {{title}}、{{filename}}、{{date}}、{{date:YYYY-MM-DD}}、{{time}}；留空 = 内置默认 YAML'))
         .addTextArea((t) => {
           const box = t.inputEl;
           if (box) {
@@ -3392,26 +3545,26 @@ class ExternalFileImageSettingTab extends obsidian.PluginSettingTab {
     }
 
     new obsidian.Setting(el)
-      .setName('不用模板时写入标题')
-      .setDesc('仅当「模板来源」选「不用模板」时生效：文件内容自动写一行「# 文件名」；模板模式不会追加标题')
+      .setName(tr('不用模板时写入标题'))
+      .setDesc(tr('仅当「模板来源」选「不用模板」时生效：文件内容自动写一行「# 文件名」；模板模式不会追加标题'))
       .addToggle((t) => t.setValue(this.plugin.settings.writeTitle)
         .onChange((v) => save('writeTitle', v)));
 
     new obsidian.Setting(el)
-      .setName('显示成功提示')
+      .setName(tr('显示成功提示'))
       .addToggle((t) => t.setValue(this.plugin.settings.showNotice)
         .onChange((v) => save('showNotice', v)));
 
     new obsidian.Setting(el)
-      .setName('调试日志')
-      .setDesc('在开发者控制台打印路径探测、保存位置等信息')
+      .setName(tr('调试日志'))
+      .setDesc(tr('在开发者控制台打印路径探测、保存位置等信息'))
       .addToggle((t) => t.setValue(this.plugin.settings.debug)
         .onChange((v) => save('debug', v)));
 
-    new obsidian.Setting(el).setName('故障排查').setHeading();
+    new obsidian.Setting(el).setName(tr('故障排查')).setHeading();
     el.createEl('p', {
       cls: 'setting-item-description',
-      text: '插图或右键菜单没生效时，运行命令「诊断：复制当前库外文件信息」，把剪贴板内容发来即可适配。',
+      text: tr('插图或右键菜单没生效时，运行命令「诊断：复制当前库外文件信息」，把剪贴板内容发来即可适配。'),
     });
   }
 
