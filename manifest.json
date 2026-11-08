@@ -1,7 +1,7 @@
 {
   "id": "external-vault",
   "name": "External Vault",
-  "version": "1.10.8",
+  "version": "1.11.0",
   "minAppVersion": "1.14.0",
   "description": "Edit Markdown notes outside your vault: paste images with portable relative paths, move notes with their attachments in or out, and link them from inside the vault.",
   "author": "Peng Xiuming",
