@@ -4259,7 +4259,7 @@ class ExternalVaultView extends obsidian.ItemView {
     refreshBtn.addEventListener('click', () => { this.refresh().catch(() => {}); });
     const finderBtn = actions.createEl('button', { text: 'Finder', cls: 'ev-panel-btn' });
     finderBtn.addEventListener('click', () => this.plugin.guard(() => this.plugin.revealExternalVault()));
-    this.listEl = el.createDiv({ cls: 'ev-panel-list' });
+    this.listEl = el.createDiv({ cls: 'ev-panel-list nav-files-container' });
     this.renderList();
   }
 
@@ -4280,6 +4280,7 @@ class ExternalVaultView extends obsidian.ItemView {
       const ctx = this.plugin.activeExternalContext();
       if (ctx && ctx.file) this.activeAbs = path.resolve(ctx.file);
     } catch (e) { /* noop */ }
+    this.expandAll = !!q; // 搜索时自动展开，方便直接看到匹配文件
     this.renderNode(this.buildTree(rows), 0, this.listEl);
   }
 
@@ -4301,40 +4302,49 @@ class ExternalVaultView extends obsidian.ItemView {
   }
 
   renderNode(node, depth, container) {
-    const dirs = Array.from(node.dirs.keys()).sort((a, b) => a.localeCompare(b, 'zh'));
+    const dirs = Array.from(node.dirs.keys()).sort((a, b) =>
+      a.localeCompare(b, 'zh-Hans-CN', { numeric: true, sensitivity: 'base' }));
     for (const name of dirs) {
       const child = node.dirs.get(name);
-      const folder = container.createDiv({ cls: 'ev-panel-folder' });
-      folder.style.paddingLeft = (8 + depth * 14) + 'px';
-      const arrow = folder.createSpan({ cls: 'ev-panel-arrow', text: '⌄' });
-      folder.createSpan({ cls: 'ev-panel-folder-name', text: name });
-      const children = container.createDiv({ cls: 'ev-panel-children' });
+      const folderEl = container.createDiv({ cls: 'tree-item nav-folder' });
+      const folderTitle = folderEl.createDiv({ cls: 'tree-item-self nav-folder-title' });
+      const collapse = folderTitle.createDiv({
+        cls: 'tree-item-icon collapse-icon nav-folder-collapse-indicator',
+      });
+      const startOpen = !!this.expandAll;
+      if (obsidian.setIcon) obsidian.setIcon(collapse, startOpen ? 'chevron-down' : 'chevron-right');
+      folderTitle.createDiv({ cls: 'tree-item-inner nav-folder-title-content', text: name });
+      const children = folderEl.createDiv({ cls: 'tree-item-children nav-folder-children' });
+      children.style.display = startOpen ? '' : 'none';
       this.renderNode(child, depth + 1, children);
-      let open = true;
-      folder.addEventListener('click', () => {
+      let open = startOpen;
+      folderTitle.addEventListener('click', () => {
         open = !open;
         children.style.display = open ? '' : 'none';
-        arrow.textContent = open ? '⌄' : '›';
+        folderTitle.classList.toggle('is-collapsed', !open);
+        if (obsidian.setIcon) obsidian.setIcon(collapse, open ? 'chevron-down' : 'chevron-right');
       });
     }
     const files = node.files.slice().sort((a, b) =>
-      path.basename(a.abs).localeCompare(path.basename(b.abs), 'zh'));
+      path.basename(a.abs).localeCompare(path.basename(b.abs), 'zh-Hans-CN',
+        { numeric: true, sensitivity: 'base' }));
     for (const f of files) {
-      const row = container.createDiv({ cls: 'ev-panel-row' });
-      row.style.paddingLeft = (8 + depth * 14) + 'px';
       const active = this.activeAbs && path.resolve(f.abs) === this.activeAbs;
-      row.createSpan({ cls: 'ev-panel-bullet', text: active ? '•' : '' });
-      const name = row.createSpan({
-        cls: 'ev-panel-name' + (active ? ' is-active' : ''),
+      const fileEl = container.createDiv({ cls: 'tree-item nav-file' });
+      const title = fileEl.createDiv({
+        cls: 'tree-item-self nav-file-title' + (active ? ' is-active' : ''),
+      });
+      const content = title.createDiv({
+        cls: 'tree-item-inner nav-file-title-content',
         text: path.basename(f.abs, path.extname(f.abs)),
       });
-      name.title = f.rel;
-      row.addEventListener('click', () => {
+      content.title = f.rel;
+      title.addEventListener('click', () => {
         this.plugin.guard(() => (f.kind === 'md'
           ? this.plugin.openExternalMd(f.abs)
           : this.plugin.openExternalAny(f.abs)));
       });
-      row.addEventListener('contextmenu', (e) => {
+      title.addEventListener('contextmenu', (e) => {
         e.preventDefault();
         this.showRowMenu(e, f);
       });
