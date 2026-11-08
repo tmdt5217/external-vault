@@ -2191,7 +2191,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     this.dbg('引用扫描：' + targets.length + ' 个文件，目标 ' +
       records.map((r) => path.basename(r.src)).join('、'));
     const rewriteOne = async (t) => {
-      if (records.some((r) => path.resolve(r.src) === path.resolve(t.abs))) return;
+      // 被移动的笔记自身也要处理（自引用链接同样需要跟着改）
       let content = '';
       let editorView = null;
       try {
