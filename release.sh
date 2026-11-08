@@ -61,3 +61,13 @@ else
   echo "未安装 gh，请打开下面链接创建 Release，并上传 main.js / manifest.json / styles.css："
   echo "https://github.com/tmdt5217/external-vault/releases/new?tag=$NEW"
 fi
+
+# macOS：在 Finder 中选中三个待上传文件，方便直接拖进 Release 页面
+if [[ "$(uname)" == "Darwin" ]]; then
+  osascript <<APPLESCRIPT >/dev/null 2>&1 || true
+tell application "Finder"
+  activate
+  reveal {POSIX file "$PWD/main.js", POSIX file "$PWD/manifest.json", POSIX file "$PWD/styles.css"}
+end tell
+APPLESCRIPT
+fi
