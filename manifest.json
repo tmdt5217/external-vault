@@ -3,7 +3,7 @@
   "name": "External Vault_PXM",
   "version": "1.10.6",
   "minAppVersion": "1.14.0",
-  "description": "Open Markdown notes outside your vault, paste or drop images with relative paths, create notes from a template, and move notes with their attachments in or out of the vault.",
+  "description": "Edit Markdown notes outside your vault: paste images with portable relative paths, move notes with their attachments in or out, and link them from inside the vault.",
   "author": "pxm",
   "isDesktopOnly": true
 }
