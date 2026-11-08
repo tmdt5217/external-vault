@@ -719,7 +719,29 @@ function relativeFromMd(mdDir, imageDir) {
  * 目录选择器：Electron 的 <input webkitdirectory> 拿到的 File.path 是绝对路径。
  * 注意空文件夹取不到 files，所以要求目录里至少有一个文件；也可以直接手输路径。
  */
-function pickDirectory(onPicked) {
+function pickDirectory(onPicked, defaultPath) {
+  // 优先用 Electron 原生目录选择器：可以指定默认位置（当前 vault 根目录）
+  try {
+    const electron = require('electron');
+    const remote = electron && electron.remote;
+    const dialog = (electron && electron.dialog) || (remote && remote.dialog);
+    if (dialog && typeof dialog.showOpenDialog === 'function') {
+      const opts = { properties: ['openDirectory', 'createDirectory'] };
+      if (defaultPath) opts.defaultPath = defaultPath;
+      const win = (electron.BrowserWindow && electron.BrowserWindow.getFocusedWindow)
+        ? electron.BrowserWindow.getFocusedWindow()
+        : (remote && remote.BrowserWindow && remote.BrowserWindow.getFocusedWindow
+          ? remote.BrowserWindow.getFocusedWindow() : null);
+      const p = win ? dialog.showOpenDialog(win, opts) : dialog.showOpenDialog(opts);
+      Promise.resolve(p).then((res) => {
+        if (res && !res.canceled && res.filePaths && res.filePaths[0]) {
+          onPicked(String(res.filePaths[0]).replace(/\\/g, '/'));
+        }
+      }).catch(() => {});
+      return;
+    }
+  } catch (e) { /* 回退到 input 方式 */ }
+
   let input = null;
   try {
     input = document.createElement('input');
@@ -3871,7 +3893,7 @@ class ExternalFileImageSettingTab extends obsidian.PluginSettingTab {
             const v = this.toRelative(dir);
             mdText.setValue(v);
             save('customMdDir', v).then(() => this.display());
-          });
+          }, vaultRoot(this.app));
         }));
 
       let assetText;
@@ -3889,7 +3911,7 @@ class ExternalFileImageSettingTab extends obsidian.PluginSettingTab {
             const v = this.toRelative(dir);
             assetText.setValue(v);
             save('customAssetDir', v).then(() => this.display());
-          });
+          }, vaultRoot(this.app));
         }));
 
       el.createEl('p', {
@@ -3946,7 +3968,7 @@ class ExternalFileImageSettingTab extends obsidian.PluginSettingTab {
             (this.plugin.settings.externalVaults || []).concat([item]);
           await save('externalVaults', this.plugin.settings.externalVaults);
           this.display();
-        });
+        }, vaultRoot(this.app));
       }));
 
     new obsidian.Setting(el)
