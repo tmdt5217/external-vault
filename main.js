@@ -2220,7 +2220,8 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
           const sourcePath = self.activeSourcePath();
           if (!sourcePath || sourcePath.startsWith('file:')) return builder.finish();
           // 同时匹配 [[wiki]]（含 #标题 / |别名）和 [文字](路径)
-          const re = /\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|[^\]]*)?\]\]|\[[^\]]*\]\((<[^>]+>|[^)\s]+)\)/g;
+          // URL 里可能含成对括号（如「共识(2026版).md」），要一起吞掉
+          const re = /\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|[^\]]*)?\]\]|\[[^\]]*\]\(((?:[^()\n]|\([^()\n]*\))+)\)/g;
           for (const range of view.visibleRanges) {
             const text = view.state.sliceDoc(range.from, range.to);
             let m;
