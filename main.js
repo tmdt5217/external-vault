@@ -1,7 +1,7 @@
 'use strict';
 
 /*
- * external-vault  v1.12.2
+ * external-vault  v1.12.3
  *
  * 用途：Obsidian 1.14+ 编辑「仓库外的 Markdown 文件」时：
  *   1) 命令「新建库外 Markdown 文件」→ 在「库外 MD 目录」里创建 .md 并尝试打开
@@ -1543,7 +1543,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     // 预热外部文件名缓存，让裸 [[文件名]] 的 hover 预览能解析
     window.setTimeout(() => { this.listExternalEntries().catch(() => {}); }, 1200);
 
-    console.log(LOG, 'loaded v1.12.2', 'md=', this.mdRel(), 'assets=', this.assetRel(),
+    console.log(LOG, 'loaded v1.12.3', 'md=', this.mdRel(), 'assets=', this.assetRel(),
       'TExternalFile=', !!(obsidian.TExternalFile));
   }
 
