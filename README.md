@@ -95,6 +95,8 @@ An Obsidian plugin for editing Markdown notes **outside your vault**: paste or d
 - 索引缓存在 `.obsidian/plugins/external-vault/index.json`（约 200 B/条，20 万篇约 40 MB）。首次建立 20 万篇约 4 秒，之后只按变化的文件增量更新，不再整库重扫。
 - 库内引用改写走 Obsidian 的 `metadataCache` 反向索引：移动 / 重命名只读真正引用它的那几篇笔记。
 - 面板每个目录最多渲染 300 项，其余用搜索框定位；10 万级目录不要靠滚动浏览。
+- 超过 5000 篇时，「清理孤儿附件」先做一次 stat 校准（20 万约 3 秒，只有变化的文件才读正文），再按反向索引出结果；小库仍逐篇精确扫描。删除/清理前一律先校准，避免索引过期导致误判。
+- 外库目录由插件常驻监听（侧栏没打开也生效），改动按文件增量更新索引，避免索引过期。
 
 ## 命令面板
 

@@ -1540,6 +1540,12 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       }
     } catch (e) { /* noop */ }
 
+    this.startExternalWatcher();
+    this.register(() => {
+      try { if (this._extWatcher) this._extWatcher.close(); } catch (e) { /* noop */ }
+      this._extWatcher = null;
+    });
+
     this.patchOpenLinkText();
     this.patchFirstLinkpathDest();
     this.setupExternalLinkRendering();
@@ -1802,6 +1808,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     this._externalNameCache = null;
     this._refIndex = new Map();
     this.ensureDirs();
+    this.startExternalWatcher();
     this.refreshExternalPanels();
   }
 
@@ -2155,6 +2162,21 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       this.saveExternalIndex(idx.files, idx.root).catch(() => {});
     }, 800);
   }
+  /** 监听当前外库目录：面板没开时也要保持索引新鲜 */
+  startExternalWatcher() {
+    try { if (this._extWatcher) { this._extWatcher.close(); this._extWatcher = null; } }
+    catch (e) { /* noop */ }
+    const dir = this.externalMdDir();
+    if (!dir || !fs.existsSync(dir)) return;
+    try {
+      this._extWatcher = fs.watch(dir, { recursive: true }, (evt, name) => {
+        if (name) this.onExternalFsEvent(String(name));
+        else this.markIndexStale();
+      });
+      this.dbg('已监听外库目录', dir);
+    } catch (e) { this.dbg('启动外库监听失败', e.message); }
+  }
+
   /** 外部目录有文件变化：按文件名做增量更新，不再整库重扫 */
   async onExternalFsEvent(rel) {
     const idx = this._indexCache && this._indexCache.data;
@@ -2196,8 +2218,13 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       let st = null;
       try { st = fs.statSync(abs); } catch (e) { st = null; }
       const cur = byAbs.get(abs);
+      const oldLinks = cur && Array.isArray(cur.links) ? cur.links.slice() : [];
       if (!st || !st.isFile()) {
-        if (cur) { byAbs.delete(abs); touched = true; }
+        if (cur) {
+          byAbs.delete(abs);
+          this.unindexRefLinks(abs, oldLinks);
+          touched = true;
+        }
         continue;
       }
       if (cur && cur.mtime === st.mtimeMs && cur.size === st.size) continue;
@@ -2234,6 +2261,10 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
           }
           entry.assets = n;
         } catch (e) { /* 读不到就保持原值，下轮再说 */ }
+      }
+      if (isMd) {
+        this.unindexRefLinks(abs, oldLinks);
+        this.indexRefLinks(abs, entry.links);
       }
       if (!cur) { idx.files.push(entry); byAbs.set(abs, entry); }
       touched = true;
@@ -2589,10 +2620,117 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
   }
 
   /** 扫描附件目录里没有被任何库外笔记引用的文件 */
+  /** 反向索引：登记某篇 md 引用了哪些名字 */
+  indexRefLinks(abs, links) {
+    if (!this._refIndex) return;
+    for (const n of links || []) {
+      const key = String(n || '').trim();
+      if (!key) continue;
+      if (!this._refIndex.has(key)) this._refIndex.set(key, []);
+      const arr = this._refIndex.get(key);
+      if (!arr.includes(abs)) arr.push(abs);
+    }
+  }
+
+  /** 反向索引：撤销某篇 md 之前的引用登记 */
+  unindexRefLinks(abs, links) {
+    if (!this._refIndex) return;
+    for (const n of links || []) {
+      const key = String(n || '').trim();
+      if (!key) continue;
+      const arr = this._refIndex.get(key);
+      if (!arr) continue;
+      const i = arr.indexOf(abs);
+      if (i >= 0) arr.splice(i, 1);
+      if (!arr.length) this._refIndex.delete(key);
+    }
+  }
+
+  /**
+   * 删除/清理前校准索引：只做 stat 扫描（只有变化的文件才读正文），
+   * 200k 篇约 3 秒；本次会话第一次、索引超过 10 分钟、或被标记过期时触发。
+   */
+  async ensureIndexFresh(force) {
+    const idx = this._indexCache && this._indexCache.data;
+    if (!idx || !Array.isArray(idx.files)) return false;
+    // force：删除这类破坏性操作，宁可花一次 stat 也要拿准数据
+    if (!force && this._lastReconcile && Date.now() - this._lastReconcile < 60000) return true;
+    if (!force && !this._sessionReconciled) {
+      // 本次会话还没校准过，走下面的扫描
+    } else if (!force) {
+      const age = Date.now() - (idx.built || 0);
+      if (!this._indexStale && age <= 10 * 60 * 1000) return true;
+    }
+    try {
+      if (idx.files.length > 20000) new obsidian.Notice('正在校准外库索引…', 2500);
+      const fresh = await this.scanExternalFiles(idx.files);
+      await this.saveExternalIndex(fresh, idx.root);
+      this.hydrateExternalCaches(fresh);
+      this._indexStale = false;
+      this._sessionReconciled = true;
+      this._lastReconcile = Date.now();
+      return true;
+    } catch (e) {
+      this.dbg('索引校准失败', e.message);
+      return false;
+    }
+  }
+
+  /** 索引是否可用于「删除判断」：没加载、轻量模式、或刚有未处理变更时都不算可靠 */
+  refIndexUsable() {
+    const idx = this._indexCache && this._indexCache.data;
+    const mdDir = this.externalMdDir();
+    if (!this._refIndex || !this._refIndex.size) return false;
+    if (!idx || !Array.isArray(idx.files) || !idx.root) return false;
+    if (!mdDir || path.resolve(idx.root) !== path.resolve(mdDir)) return false;
+    if (idx.files.length > SCAN_LIGHT_LIMIT) return false;   // 轻量索引没有 links
+    if (this._indexStale) return false;                       // 有拿不到文件名的变更，可能过期
+    if (this._extFsPending && this._extFsPending.size) return false;
+    if (this._extFsTimer) return false;
+    return true;
+  }
+
   async findOrphanAssets() {
     const assetDir = this.externalAssetDir();
     const mdDir = this.externalMdDir();
     if (!assetDir || !fs.existsSync(assetDir)) return [];
+    // 快路径：索引里有每篇的 links，反查即可，不读任何正文。
+    // 只在库足够大（>5000 篇）时启用：小库直接扫更准，也足够快。
+    const ORPHAN_INDEX_MIN = 5000;
+    let idxNow = this._indexCache && this._indexCache.data;
+    const bigEnough = !!(idxNow && Array.isArray(idxNow.files) && idxNow.files.length > ORPHAN_INDEX_MIN);
+    if (bigEnough) await this.ensureIndexFresh(true);
+    idxNow = this._indexCache && this._indexCache.data;
+    const stillBig = !!(idxNow && Array.isArray(idxNow.files) && idxNow.files.length > ORPHAN_INDEX_MIN);
+    if (stillBig && this.refIndexUsable()) {
+      const fast = [];
+      const walkFast = async (dir) => {
+        let entries = [];
+        try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); }
+        catch (e) { return; }
+        for (const en of entries) {
+          if (en.name.startsWith('.')) continue;
+          const p = path.join(dir, en.name);
+          if (en.isDirectory()) { await walkFast(p); continue; }
+          if (!en.isFile() || isMdPath(en.name)) continue;
+          const base = path.basename(p);
+          const stem = path.basename(p, path.extname(p));
+          if (this._refIndex.has(base) || this._refIndex.has(stem)) continue;
+          let st = null;
+          try { st = fs.statSync(p); } catch (e) { /* noop */ }
+          fast.push({
+            abs: p,
+            rel: path.relative(assetDir, p).split(path.sep).join('/'),
+            size: st ? st.size : 0,
+            mtime: st ? st.mtimeMs : 0,
+          });
+        }
+      };
+      await walkFast(assetDir);
+      this.dbg('孤儿扫描：走索引，' + fast.length + ' 个候选');
+      return fast.sort((a, b) => b.mtime - a.mtime);
+    }
+
     const used = new Set();
     const wikiNames = new Set();
     let mdFiles = [];
@@ -4597,10 +4735,16 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     const rawExclude = Array.isArray(excludeMdAbs) ? excludeMdAbs : [excludeMdAbs];
     const excluded = new Set(rawExclude.filter(Boolean).map((p) => path.resolve(p)));
     const wanted = new Set(list.map((a) => path.resolve(a)));
-    // 索引里有 links 时直接反查，避免删除一篇就把 20 万篇全读一遍
-    if (this._refIndex && this._refIndex.size) {
+    // 索引里有 links 时直接反查，避免删除一篇就把 20 万篇全读一遍。
+    // 但必须先校准：索引过期时漏掉一条引用，就等于误删一张还在用的图。
+    const fresh = await this.ensureIndexFresh(true);
+    if (fresh && this.refIndexUsable()) {
       for (const a of list) {
-        for (const ref of this._refIndex.get(path.basename(a)) || []) {
+        // markdown 链接登记的是去掉扩展名的主名，wiki 链接登记的是带扩展名的全名，两个都要查
+        const base = path.basename(a);
+        const stem = path.basename(a, path.extname(a));
+        const refs = (this._refIndex.get(base) || []).concat(this._refIndex.get(stem) || []);
+        for (const ref of refs) {
           if (excluded.has(path.resolve(ref))) continue;
           used.add(a);
           break;
@@ -5820,21 +5964,6 @@ class ExternalVaultView extends obsidian.ItemView {
     if (!this.plugin._bootScanDone) {
       this.plugin._bootScanDone = true;
       this.plugin.markIndexStale();
-    }
-    // 外部目录变化时防抖刷新，减少高频全量扫描
-    const watchDir = this.plugin.externalMdDir();
-    if (watchDir && fs.existsSync(watchDir)) {
-      try {
-        this._watcher = fs.watch(watchDir, { recursive: true }, (evt, name) => {
-          if (name) { this.plugin.onExternalFsEvent(String(name)); return; }
-          // 个别平台/递归事件拿不到文件名：退回全量增量扫描兜底
-          this.plugin.markIndexStale();
-          window.clearTimeout(this._watchTimer);
-          this._watchTimer = window.setTimeout(() => {
-            this.refresh().catch(() => {});
-          }, 1200);
-        });
-      } catch (e) { /* noop */ }
     }
     this.registerEvent(this.app.workspace.on('file-open', () => {
       const now = Date.now();
