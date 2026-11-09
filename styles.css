@@ -117,12 +117,23 @@ span.cm-hmd-internal-link.ev-external-link .cm-underline,
   text-decoration: none !important;
 }
 
-/* 库外笔记的标签页标题：红色（激活态也保持） */
+/* 库外笔记的标签页标题：非激活 = 淡红，激活 = 深红 */
 .workspace-tab-header-inner-title.ev-external-tab,
-.workspace-tab-header.is-active .workspace-tab-header-inner-title.ev-external-tab,
 .workspace-tab-header-inner-title.ev-external-tab .workspace-tab-header-inner-title-text {
-  color: rgb(188, 43, 22) !important;
+  color: rgba(188, 43, 22, 0.55) !important;
   text-decoration: none;
+}
+
+.workspace-tab-header.is-active .workspace-tab-header-inner-title.ev-external-tab,
+.workspace-tab-header.is-active .workspace-tab-header-inner-title.ev-external-tab .workspace-tab-header-inner-title-text,
+.workspace-tab-header.mod-active .workspace-tab-header-inner-title.ev-external-tab {
+  color: rgb(188, 43, 22) !important;
+}
+
+/* 暗色主题下淡红要提亮，否则深底上发黑；激活态仍走上面的深红 */
+.theme-dark .workspace-tab-header-inner-title.ev-external-tab,
+.theme-dark .workspace-tab-header-inner-title.ev-external-tab .workspace-tab-header-inner-title-text {
+  color: rgba(236, 122, 106, 0.8) !important;
 }
 
 /* 「（外）」后缀已移除，仅保留红色区分 */

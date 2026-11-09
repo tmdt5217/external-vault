@@ -6,11 +6,9 @@ An Obsidian plugin for editing Markdown notes **outside your vault**: paste or d
 
 ## 演示
 
-![External Vault 演示](docs/demo.gif)
-
 > 10 秒看懂：在库外笔记里粘贴截图 → 自动存到 `External Vault/attachments` 并写入相对路径 → 右键标签页「移入 Vault」，笔记和附件一起搬回库内，链接自动重写。
 >
-> 录制方法见 [docs/演示录制.md](docs/演示录制.md)。把导出的 GIF 命名为 `docs/demo.gif`，GitHub 与插件商店会自动显示。
+> 演示 GIF 待补：录制方法见 [docs/演示录制.md](docs/演示录制.md)，导出后命名为 `docs/demo.gif`，再在本节插入 `![演示](docs/demo.gif)`。
 
 ## 功能
 
