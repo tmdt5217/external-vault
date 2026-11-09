@@ -733,22 +733,25 @@ function listExternalMdFiles(dir, max) {
 }
 
 function formatLinkTarget(rel, style) {
-  // plain 也不能生成坏链接：空格/括号/尖括号在 Markdown 里必须编码
+  // % # ? 在 Markdown 链接里有特殊含义，任何风格下都必须转义，
+  // 否则「50%off.png」「a#b.png」会被解析成转义序列 / 锚点
+  const core = (seg) => seg
+    .replace(/%/g, '%25').replace(/#/g, '%23').replace(/\?/g, '%3F');
   if (style === 'plain') {
-    if (!/[\s()<>]/.test(rel)) return rel;
-    return rel.split('/').map((seg) => seg
-      .replace(/%/g, '%25').replace(/ /g, '%20')
+    if (!/[\s()<>#?%]/.test(rel)) return rel;
+    return rel.split('/').map((seg) => core(seg)
+      .replace(/ /g, '%20')
       .replace(/\(/g, '%28').replace(/\)/g, '%29')
       .replace(/</g, '%3C').replace(/>/g, '%3E')).join('/');
   }
   if (style === 'encode') {
-    return rel.split('/').map((seg) => seg
+    return rel.split('/').map((seg) => core(seg)
       .replace(/ /g, '%20')
-      .replace(/\(/g, '%28').replace(/\)/g, '%29')
-      .replace(/#/g, '%23').replace(/\?/g, '%3F')).join('/');
+      .replace(/\(/g, '%28').replace(/\)/g, '%29')).join('/');
   }
-  // angle：只在必要时加尖括号，中文/空格都能保留可读性
-  return /[\s()<>]/.test(rel) ? '<' + rel + '>' : rel;
+  // angle：保留中文和空格的可读性，只转义必须转义的字符
+  const encoded = rel.split('/').map(core).join('/');
+  return /[\s()<>]/.test(encoded) ? '<' + encoded + '>' : encoded;
 }
 
 /** 从任意起点计算指向目标的相对链接（逐段编码，类方法与纯函数共用） */
@@ -2591,12 +2594,27 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     const mdDir = this.externalMdDir();
     if (!assetDir || !fs.existsSync(assetDir)) return [];
     const used = new Set();
+    const wikiNames = new Set();
     let mdFiles = [];
     try { mdFiles = await listMarkdownFiles(mdDir, true, 8); } catch (e) { mdFiles = []; }
+    let scanned = 0;
     for (const md of mdFiles) {
+      scanned += 1;
+      if (scanned % 200 === 0) await yieldToUI();
+      let text = '';
+      try { text = await fs.promises.readFile(md, 'utf8'); } catch (e) { continue; }
       try {
-        for (const a of this.assetPathsIn(md)) used.add(path.resolve(a));
+        for (const it of collectLocalAssets(text, md, null)) used.add(path.resolve(it.abs));
       } catch (e) { /* noop */ }
+      // 库外笔记里的 ![[图片]] 靠文件名解析，这里按名字兜底，避免把仍在用的图当孤儿
+      const re = /!\[\[([^\]|#]+)/g;
+      let m;
+      while ((m = re.exec(text)) !== null) {
+        const raw = String(m[1] || '').trim();
+        if (!raw) continue;
+        wikiNames.add(path.basename(raw));
+        wikiNames.add(path.basename(raw, path.extname(raw)));
+      }
     }
     const files = [];
     const walk = async (dir) => {
@@ -2622,7 +2640,12 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     };
     await walk(assetDir);
     return files
-      .filter((f) => !used.has(path.resolve(f.abs)))
+      .filter((f) => {
+        if (used.has(path.resolve(f.abs))) return false;
+        const base = path.basename(f.abs);
+        const stem = path.basename(f.abs, path.extname(f.abs));
+        return !(wikiNames.has(base) || wikiNames.has(stem));
+      })
       .sort((a, b) => b.mtime - a.mtime);
   }
 
@@ -3991,7 +4014,8 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
         if (cutAllowed) {
           // 关闭废纸篓 = 直接 unlink：先留一份本地备份，保证「撤销上一次移动」可用
           this._moveBackups = null;
-          if (!this.settings.cutUseTrash) {
+          // 非 macOS 时撤销找不到系统废纸篓里的文件，所以即使开了废纸篓也要备份
+          if (!this.settings.cutUseTrash || process.platform !== 'darwin') {
             let dir = null;
             try { dir = this.backupDirFor('move'); } catch (e) { dir = null; }
             if (dir) {
@@ -4573,16 +4597,40 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     const rawExclude = Array.isArray(excludeMdAbs) ? excludeMdAbs : [excludeMdAbs];
     const excluded = new Set(rawExclude.filter(Boolean).map((p) => path.resolve(p)));
     const wanted = new Set(list.map((a) => path.resolve(a)));
+    // 索引里有 links 时直接反查，避免删除一篇就把 20 万篇全读一遍
+    if (this._refIndex && this._refIndex.size) {
+      for (const a of list) {
+        for (const ref of this._refIndex.get(path.basename(a)) || []) {
+          if (excluded.has(path.resolve(ref))) continue;
+          used.add(a);
+          break;
+        }
+      }
+      return used;
+    }
     let mds = [];
     try { mds = await listMarkdownFiles(this.externalMdDir(), true, 8); }
     catch (e) { this.dbg('扫描库外 MD 失败，按「全部共享」处理', e.message); return new Set(list); }
+    // 没有索引又没有上限时宁可全部保留，也不要为了删几个孤儿读几分钟
+    const SCAN_LIMIT = 5000;
+    if (mds.length > SCAN_LIMIT) {
+      this.dbg('外部库 ' + mds.length + ' 篇，超过 ' + SCAN_LIMIT + ' 篇：按「全部共享」处理');
+      return new Set(list);
+    }
+    let scanned = 0;
     for (const md of mds) {
       if (excluded.has(path.resolve(md))) continue;
+      scanned += 1;
+      if (scanned % 200 === 0) await yieldToUI();
       let text = '';
       try { text = await fs.promises.readFile(md, 'utf8'); } catch (e) { continue; }
       for (const it of collectLocalAssets(text, md, null)) {
         const abs = path.resolve(it.abs);
         if (wanted.has(abs)) used.add(it.abs);
+      }
+      // ![[图片]] 这类按文件名引用的写法：名字出现即视为仍在使用（宁可多留）
+      for (const a of list) {
+        if (text.includes(path.basename(a))) used.add(a);
       }
     }
     return used;
