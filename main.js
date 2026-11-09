@@ -305,6 +305,7 @@ const DEFAULT_SETTINGS = {
   vaultTargetFolder: '',                // 命令面板「转入库」时 MD 放哪个库内文件夹（空 = 根）
   vaultAssetFolder: 'assets',           // 命令面板「转入库」时附件放在目标 MD 目录下的哪个子目录
   handleOtherAttachments: true,         // 拖入非图片文件（PDF 等）也存进附件目录
+  richPasteTakeover: true,              // 富文本粘贴里带文件时接管，避免图片被 Obsidian 写进库内
   moveSourceAfterTransfer: false,       // 命令面板：转移后删除源文件（默认关 = 只复制）
   transferRecursive: false,             // 批量转移时是否包含子文件夹
   cutUseTrash: true,                    // 剪切时移入系统废纸篓（默认开，误删可恢复）
@@ -730,7 +731,14 @@ function listExternalMdFiles(dir, max) {
 }
 
 function formatLinkTarget(rel, style) {
-  if (style === 'plain') return rel;
+  // plain 也不能生成坏链接：空格/括号/尖括号在 Markdown 里必须编码
+  if (style === 'plain') {
+    if (!/[\s()<>]/.test(rel)) return rel;
+    return rel.split('/').map((seg) => seg
+      .replace(/%/g, '%25').replace(/ /g, '%20')
+      .replace(/\(/g, '%28').replace(/\)/g, '%29')
+      .replace(/</g, '%3C').replace(/>/g, '%3E')).join('/');
+  }
   if (style === 'encode') {
     return rel.split('/').map((seg) => seg
       .replace(/ /g, '%20')
@@ -749,6 +757,29 @@ function externalLinkBetween(targetAbs, fromAbs) {
   return rel.split('/').map((seg) => seg
     .replace(/%/g, '%25').replace(/#/g, '%23')
     .replace(/\?/g, '%3F').replace(/ /g, '%20')).join('/');
+}
+
+/** 富文本粘贴时提取纯文本：优先 DOMParser，取不到就退回标签剥离 */
+function htmlToPlainText(html) {
+  const raw = String(html || '');
+  try {
+    const doc = new DOMParser().parseFromString(raw, 'text/html');
+    const body = doc && doc.body;
+    if (body) {
+      const text = String(body.innerText || body.textContent || '')
+        .replace(/\u00a0/g, ' ').trim();
+      if (text) return text;
+    }
+  } catch (e) { /* 没有 DOMParser，走下面的兜底 */ }
+  try {
+    return raw
+      .replace(/<(br|\/p|\/div|\/li|\/tr)[^>]*>/gi, '\n')
+      .replace(/<[^>]+>/g, '')
+      .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+  } catch (e2) { return ''; }
 }
 
 /** 只用于把 v1.2 的绝对路径配置迁移成 v1.3 的相对目录 */
@@ -996,9 +1027,20 @@ function rewriteContent(content, items, assetMap, relAssetDir, style) {
     if (!dest) continue;
     const rel = (relAssetDir ? relAssetDir + '/' : '') + path.basename(dest);
     const target = formatLinkTarget(rel, style);
-    const rep = it.kind === 'wiki'
-      ? it.prefix + '[' + (it.alt || path.basename(it.abs)) + '](' + target + ')'
-      : it.prefix + '[' + it.alt + '](' + target + (it.tail || '') + ')';
+    let rep;
+    if (it.kind === 'wiki') {
+      // ![[图片|300]] / ![[图片|300x200]] 的尺寸不能被当成 alt 文本丢掉
+      const size = /^(\d+)(?:x(\d+))?$/.exec(String(it.alt || '').trim());
+      if (it.prefix === '!' && size) {
+        const src = rel.split('/').map((seg) => seg.replace(/ /g, '%20')).join('/');
+        rep = '<img src="' + src + '" width="' + size[1] + '"' +
+          (size[2] ? ' height="' + size[2] + '"' : '') + '>';
+      } else {
+        rep = it.prefix + '[' + (it.alt || path.basename(it.abs)) + '](' + target + ')';
+      }
+    } else {
+      rep = it.prefix + '[' + it.alt + '](' + target + (it.tail || '') + ')';
+    }
     out = out.slice(0, it.start) + rep + out.slice(it.end);
   }
   return out;
@@ -1963,6 +2005,44 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     const gone = new Set((records || []).map((r) => path.resolve(r.src)));
     if (!gone.size) return;
     idx.files = idx.files.filter((f) => !gone.has(path.resolve(f.abs)));
+    // 移出的笔记要补进索引，否则面板刷新后看不到它
+    const mdDir = this.externalMdDir();
+    for (const r of records || []) {
+      const dest = r && r.dest ? path.resolve(r.dest) : '';
+      if (!dest || !fs.existsSync(dest) || gone.has(dest)) continue;
+      if (!this.isInsideExternalVault(dest)) continue;
+      if (idx.files.some((f) => path.resolve(f.abs) === dest)) continue;
+      let st = null;
+      try { st = fs.statSync(dest); } catch (e) { continue; }
+      const isMd = /[.](md|markdown)$/i.test(dest);
+      let assets = 0;
+      let aliases = [];
+      let links = [];
+      if (isMd) {
+        try {
+          const text = fs.readFileSync(dest, 'utf8');
+          aliases = parseFrontmatterAliases(text);
+          links = extractLinkNames(text);
+          for (const it of collectLocalAssets(text, dest, null)) {
+            if (isInsideVault(it.abs, this.app) || !fs.existsSync(it.abs)) continue;
+            assets += 1;
+          }
+        } catch (e) { /* noop */ }
+      }
+      idx.files.push({
+        abs: dest,
+        rel: path.relative(mdDir, dest).split(path.sep).join('/'),
+        mtime: st.mtimeMs,
+        ctime: st.birthtimeMs,
+        size: st.size,
+        assets,
+        aliases,
+        links,
+        kind: isMd ? 'md' : 'file',
+      });
+    }
+    this._sortedCache = null;
+    this._indexByAbs = null;
     if (this._indexSaveTimer) { try { clearTimeout(this._indexSaveTimer); } catch (e) { /* noop */ } }
     this._indexSaveTimer = window.setTimeout(() => {
       this._indexSaveTimer = null;
@@ -2533,6 +2613,23 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
         new obsidian.Notice('库内已有同名笔记「' + name + '」，这是两个独立文件', 6000);
       }
       this._externalNameCache = null;
+      this._hydratedFor = null;
+      const idx = this._indexCache && this._indexCache.data;
+      if (idx && Array.isArray(idx.files)) {
+        for (const f of idx.files) {
+          if (path.resolve(f.abs) !== path.resolve(abs)) continue;
+          f.abs = dest;
+          f.rel = path.relative(this.externalMdDir(), dest).split(path.sep).join('/');
+          break;
+        }
+        this._sortedCache = null;
+        this._indexByAbs = null;
+        if (this._indexSaveTimer) { try { clearTimeout(this._indexSaveTimer); } catch (e) { /* noop */ } }
+        this._indexSaveTimer = window.setTimeout(() => {
+          this._indexSaveTimer = null;
+          this.saveExternalIndex(idx.files, idx.root).catch(() => {});
+        }, 1500);
+      }
       try { await this.rewriteLinksForRename(abs, dest); } catch (e) { this.dbg('重命名后改写链接失败', e.message); }
       this.refreshExternalPanels();
       new obsidian.Notice('已重命名为：' + name);
@@ -3254,12 +3351,26 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     const ctx = this.contextFor(e);
     if (!ctx) return;
 
-    // 网页「图文一起复制」时不拦截，避免把正文文字丢掉
-    let hasHtml = false;
-    try { hasHtml = !!(cd.getData && cd.getData('text/html')); } catch (err) { /* noop */ }
-    if (hasHtml) { this.dbg('富文本粘贴，放行'); return; }
+    // 富文本（网页/Word 图文一起复制）里也带文件时，默认接管：
+    // 只把文字按纯文本插入，图片仍存到库外，避免 Obsidian 把图写进库内附件夹
+    let html = '';
+    try { html = (cd.getData && cd.getData('text/html')) || ''; } catch (err) { html = ''; }
+    if (html && this.settings.richPasteTakeover === false) {
+      this.dbg('富文本粘贴：按设置放行给 Obsidian');
+      return;
+    }
 
     this.stop(e);
+    if (html) {
+      let plain = htmlToPlainText(html);
+      if (!plain) {
+        try { plain = String(cd.getData('text/plain') || ''); } catch (err) { plain = ''; }
+      }
+      if (plain) {
+        try { ctx.view.editor.replaceSelection(plain); } catch (err) { /* noop */ }
+      }
+      this.dbg('富文本粘贴：已接管，文字按纯文本插入');
+    }
     this.dbg('paste', files.map((f) => f.name || f.type), '→', this.imageDirFor(ctx));
     await this.saveAndInsert(ctx, files, null);
   }
@@ -3730,6 +3841,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     const doMove = typeof options.moveSource === 'boolean'
       ? options.moveSource : this.settings.moveSourceAfterTransfer;
     let cut = { removed: 0, trashed: 0, failed: [] };
+    const keptOutside = [];
     let skipped = '';
     let openedInPlace = false;
     if (doMove) {
@@ -3753,10 +3865,37 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
         }
         // 被其他笔记共用的附件只复制、保留原件，避免弄断别人的链接
         const keep = options.keepAssetSources instanceof Set ? options.keepAssetSources : new Set();
-        const srcFiles = Array.from(new Set(plans.map((p) => p.src)
-          .concat(Array.from(assetMap.keys()).filter((a) => !keep.has(a)))))
+        // 只剪切「库内」或「外部库」里的源；两个目录之外的附件（如 ../Pictures/photo.jpg）
+        // 只复制并保留原件，避免移动一篇笔记把用户自己的图片删掉
+        const assetSources = Array.from(assetMap.keys()).filter((a) => {
+          if (keep.has(a)) return false;
+          let inside = false;
+          try { inside = isInsideVault(a, this.app) || this.isInsideExternalVault(a); }
+          catch (e) { inside = true; }
+          if (inside) return true;
+          keptOutside.push(a);
+          return false;
+        });
+        const srcFiles = Array.from(new Set(plans.map((p) => p.src).concat(assetSources)))
           .filter((s) => !destFiles.has(s)); // 源与目标同路径时绝不删
         if (cutAllowed) {
+          // 关闭废纸篓 = 直接 unlink：先留一份本地备份，保证「撤销上一次移动」可用
+          this._moveBackups = null;
+          if (!this.settings.cutUseTrash) {
+            let dir = null;
+            try { dir = this.backupDirFor('move'); } catch (e) { dir = null; }
+            if (dir) {
+              const map = new Map();
+              srcFiles.forEach((f, i) => {
+                let st = null;
+                try { st = fs.statSync(f); } catch (e) { return; }
+                if (!st.isFile() || st.size > 32 * 1024 * 1024) return;
+                const b = this.backupFile(f, dir, i);
+                if (b) map.set(f, b);
+              });
+              if (map.size) this._moveBackups = map;
+            }
+          }
           cut = await cutSourceFiles(srcFiles, !!this.settings.cutUseTrash);
         } else {
           skipped = '库内新文件尚未被 Obsidian 索引，已保留库外源文件（未剪切）；确认标签正常后可手动删除';
@@ -3779,6 +3918,10 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     else moveLine = '\n源文件已剪切：移除 ' + cut.removed + ' 个' +
       (cut.trashed ? '（其中 ' + cut.trashed + ' 个进废纸篓）' : '') +
       (cut.failed.length ? '\n注意：' + cut.failed.length + ' 个源文件未能删除，仍留在原处（详见控制台）' : '');
+    const outsideLine = keptOutside.length
+      ? '\n注意：' + keptOutside.length + ' 个附件在库内/外库之外，已复制但保留原件（' +
+        path.basename(keptOutside[0]) + (keptOutside.length > 1 ? ' 等' : '') + '）'
+      : '';
     const refLine = missingRefs
       ? '\n注意：' + missingRefs + ' 个附件引用找不到源文件，未搬运、链接保持原样（可用「修复：当前库外 MD 里的图片链接」补救）'
       : '';
@@ -3788,7 +3931,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     const summary = '已' + (direction === 'in' ? '转入库' : '移出库') + ' ' + plans.length +
       ' 篇笔记 + ' + assetMap.size + ' 个附件\n目标：' + mdDestDir +
       '\n附件：' + assetDestDir +
-      (options.note ? '\n' + options.note : '') + refLine + moveLine + openLine;
+      (options.note ? '\n' + options.note : '') + outsideLine + refLine + moveLine + openLine;
     new obsidian.Notice(summary, 10000);
     console.log(LOG, summary);
     if (missingRefs) console.warn(LOG, missingRefs + ' 个附件引用找不到源文件，链接未重写');
@@ -3803,8 +3946,14 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
         ts: Date.now(),
         direction,
         trashed: !!this.settings.cutUseTrash,
-        notes: plans.map((p) => ({ src: p.src, dest: p.dest })),
-        assets: Array.from(assetMap.entries()).map(([src, dest]) => ({ src, dest })),
+        notes: plans.map((p) => ({
+          src: p.src, dest: p.dest,
+          backup: this._moveBackups ? (this._moveBackups.get(p.src) || null) : null,
+        })),
+        assets: Array.from(assetMap.entries()).map(([src, dest]) => ({
+          src, dest,
+          backup: this._moveBackups ? (this._moveBackups.get(src) || null) : null,
+        })),
       };
       try { await this.saveData(this.settings); } catch (e) { /* noop */ }
     }
@@ -4011,15 +4160,29 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
 
     const extAssets = list.filter((a) => !isInsideVault(a, this.app));
     if (extAssets.length) {
-      const dirs = new Set((excludeMdAbs || []).map((p) => path.dirname(path.resolve(p))));
-      for (const d of dirs) {
+      const byBase = new Map(extAssets.map((a) => [path.basename(a), a]));
+      // 索引里有 links 时直接反查：全库范围、零读盘
+      if (this._refIndex && this._refIndex.size) {
+        for (const [base, abs] of byBase) {
+          for (const ref of this._refIndex.get(base) || []) {
+            if (excluded.has(path.resolve(ref))) continue;
+            if (fs.existsSync(ref)) { shared.add(abs); break; }
+          }
+        }
+      } else {
+        // 轻量索引没有 links：递归扫（带上限），覆盖子目录里的引用
         let mds = [];
-        try { mds = await listMarkdownFiles(d, false); } catch (e) { /* noop */ }
+        try { mds = await listMarkdownFiles(this.externalMdDir(), true, 8); } catch (e) { mds = []; }
+        const LIMIT = 5000;
+        let n = 0;
         for (const f of mds) {
           if (excluded.has(path.resolve(f))) continue;
+          n += 1;
+          if (n > LIMIT) { this.dbg('共享附件检测：外部库过大，只扫前 ' + LIMIT + ' 篇'); break; }
+          if (n % 200 === 0) await yieldToUI();
           let text = '';
           try { text = await fs.promises.readFile(f, 'utf8'); } catch (e) { continue; }
-          for (const a of extAssets) if (text.includes(path.basename(a))) shared.add(a);
+          for (const [base, abs] of byBase) if (text.includes(base)) shared.add(abs);
         }
       }
     }
@@ -4332,11 +4495,9 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     }
     const toDelete = plan.doomed.filter((a) => !keepByFailed.has(path.resolve(a)));
 
-    // 移入时保留所有标签，只刷新面板；移出时仅关闭非活动的被移走标签
-    if (direction !== 'in') {
-      for (const src of deleted) {
-        this.detachLeaves((view) => externalAbsFromFile(view.file, this.app) === src);
-      }
+    // 被删除的笔记，标签页一并关掉
+    for (const src of deleted) {
+      this.detachLeaves((view) => externalAbsFromFile(view.file, this.app) === src);
     }
     toDelete.forEach((p, i) => {
       const b = this.backupFile(p, backupDir, list.length + i);
@@ -5077,6 +5238,12 @@ class ExternalFileImageSettingTab extends obsidian.PluginSettingTab {
       .setDesc(tr('开启后拖入 PDF、docx、zip 等文件也存进附件目录并插入 [文件名](相对路径)；.md/.txt 等笔记类不接管'))
       .addToggle((t) => t.setValue(this.plugin.settings.handleOtherAttachments)
         .onChange((v) => save('handleOtherAttachments', v)));
+
+    new obsidian.Setting(el)
+      .setName(tr('接管富文本粘贴里的图片'))
+      .setDesc(tr('网页/Word 里「文字+图片」一起复制时，默认接管：文字按纯文本插入，图片存到库外附件目录。关闭则交回 Obsidian（图片会进库内附件夹，格式保留）'))
+      .addToggle((t) => t.setValue(this.plugin.settings.richPasteTakeover !== false)
+        .onChange((v) => save('richPasteTakeover', v)));
 
     // 「一键转移（连附件）」这一组设置已从面板移除：它只影响命令面板的 4 个旧命令。
     // 这些命令仍按 DEFAULT_SETTINGS 的固定默认值运行；唯一对右键菜单也生效的
