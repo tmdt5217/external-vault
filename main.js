@@ -276,6 +276,7 @@ const EN = {
   // 菜单
   '移出 Vault（含附件）': 'Move out of vault (with attachments)',
   '移入 Vault（含附件）': 'Move into vault (with attachments)',
+  '移入 External Vault（含附件）': 'Move into External Vault (with attachments)',
   '删除库外 MD（含附件）': 'Delete external note (with attachments)',
   ' 篇': ' notes',
   ' 篇 MD': ' MD notes',
@@ -3969,12 +3970,19 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
         const keep = options.keepAssetSources instanceof Set ? options.keepAssetSources : new Set();
         // 只剪切「库内」或「外部库」里的源；两个目录之外的附件（如 ../Pictures/photo.jpg）
         // 只复制并保留原件，避免移动一篇笔记把用户自己的图片删掉
+        // 「移入 External Vault」这种显式导入：允许把源笔记自己目录树里的附件一起搬走，
+        // 但不碰 ../Pictures 这类不相干的路径
+        const srcDirs = options.allowOutsideCut === true
+          ? plans.map((p) => path.dirname(path.resolve(p.src)))
+          : [];
+        const underSrcDir = (p) => srcDirs.some((d) => p === d || p.startsWith(d + path.sep));
         const assetSources = Array.from(assetMap.keys()).filter((a) => {
           if (keep.has(a)) return false;
           let inside = false;
           try { inside = isInsideVault(a, this.app) || this.isInsideExternalVault(a); }
           catch (e) { inside = true; }
           if (inside) return true;
+          if (underSrcDir(path.resolve(a))) return true;
           keptOutside.push(a);
           return false;
         });
@@ -4152,6 +4160,15 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
           .setTitle(tr('移入 Vault（含附件）'))
           .setIcon('lucide-log-in')
           .onClick(() => this.guard(() => this.contextMoveIn(file))));
+        const abs = externalAbsFromFile(file, this.app);
+        if (abs && !this.isInsideExternalVault(abs)) {
+          menu.addItem((item) => item
+            .setSection('action')
+            .setTitle(tr('移入 External Vault（含附件）'))
+            .setIcon('lucide-folder-input')
+            .onClick(() => this.guard(() => this.chooseVault(
+              () => this.moveIntoExternalVault(file)))));
+        }
       } catch (e) { this.dbg('添加「移入 Vault」菜单项失败', e.message); }
     };
     const addDelete = (menu, file) => {
@@ -4472,6 +4489,35 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
         return switched;
       },
       note: notes.join('\n'),
+    });
+  }
+
+  /**
+   * 既不在库内、也不在外部库里的 MD（用「打开仓库外的文件…」临时打开的那种）：
+   * 连同它引用的附件一起搬进当前的 External Vault。
+   */
+  async moveIntoExternalVault(file) {
+    const src = externalAbsFromFile(file, this.app);
+    if (!src) throw new Error('无法解析这个库外文件的绝对路径');
+    if (!fs.existsSync(src)) throw new Error('文件不存在：' + src);
+    if (this.isInsideExternalVault(src)) {
+      new obsidian.Notice('这个文件已经在 External Vault 里了', 5000);
+      return null;
+    }
+    this.flushOpenEditor(src, (v) => externalAbsFromFile(v.file, this.app) === src);
+    const assets = new Set(this.assetPathsIn(src));
+    const keep = await this.sharedAssets(Array.from(assets), [src]);
+    return this.executeTransfer([src], 'out', {
+      moveSource: this.settings.contextMenuMoveSource,
+      keepAssetSources: keep,
+      beforeRemove: async (plans) => {
+        const leaf = this.findLeafByFile((f) => externalAbsFromFile(f, this.app) === src);
+        const dest = plans && plans[0] && plans[0].dest;
+        if (!leaf || !dest) return false;
+        return this.openExternalInLeaf(leaf, dest);
+      },
+      note: keep.size ? keep.size + ' 个附件还被别的笔记引用，已保留原件' : '',
+      allowOutsideCut: true,
     });
   }
 
