@@ -278,6 +278,7 @@ const EN = {
   '移入 Vault（含附件）': 'Move into vault (with attachments)',
   '删除库外 MD（含附件）': 'Delete external note (with attachments)',
   ' 篇': ' notes',
+  ' 篇 MD': ' MD notes',
 };
 
 let UI_LANG = 'zh';
@@ -1683,6 +1684,84 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     return list.find((v) => v.id === this.settings.activeVaultId) || list[0];
   }
 
+  /**
+   * 某个外部库有多少篇 MD。
+   * 当前库且索引已加载时直接数索引（零读盘）；其余走目录遍历，结果缓存 20 秒。
+   * 返回 -1 表示目录不存在或读不到。
+   */
+  async countVaultMd(vault) {
+    const v = vault || this.activeVault();
+    if (!v) return -1;
+    const dir = resolveVaultRelative(this.app, v.mdDir);
+    if (!dir) return -1;
+    if (!this._mdCountCache) this._mdCountCache = new Map();
+    const now = Date.now();
+    const hit = this._mdCountCache.get(dir);
+    if (hit && now - hit.ts < 300000) return hit.count;
+    const idx = this._indexCache && this._indexCache.data;
+    if (idx && Array.isArray(idx.files) && idx.root &&
+      path.resolve(idx.root) === path.resolve(dir)) {
+      const count = idx.files.filter((f) => f.kind === 'md').length;
+      this._mdCountCache.set(dir, { ts: now, count });
+      return count;
+    }
+    let count = -1;
+    try {
+      count = fs.existsSync(dir) ? (await listMarkdownFiles(dir, true, 8)).length : 0;
+    } catch (e) { count = -1; }
+    this._mdCountCache.set(dir, { ts: now, count });
+    return count;
+  }
+
+  /** 同步取已缓存的篇数（菜单等同步场景用；没有缓存返回 -1） */
+  peekVaultMdCount(vault) {
+    const v = vault || this.activeVault();
+    if (!v) return -1;
+    const dir = resolveVaultRelative(this.app, v.mdDir);
+    if (!dir) return -1;
+    const idx = this._indexCache && this._indexCache.data;
+    if (idx && Array.isArray(idx.files) && idx.root &&
+      path.resolve(idx.root) === path.resolve(dir)) {
+      return idx.files.filter((f) => f.kind === 'md').length;
+    }
+    const hit = this._mdCountCache && this._mdCountCache.get(dir);
+    return hit ? hit.count : -1;
+  }
+
+  /**
+   * 多个外部库时，先弹二级菜单让用户选定目标库，再执行动作。
+   * 只有一个库时直接执行，不打扰。
+   */
+  chooseVault(action, evt) {
+    const list = this.externalVaultsList();
+    if (!list.length) return;
+    if (list.length === 1) {
+      this.guard(() => action(list[0]));
+      return;
+    }
+    const menu = new obsidian.Menu();
+    for (const v of list) {
+      const c = this.peekVaultMdCount(v);
+      menu.addItem((item) => item
+        .setTitle(v.name + (c >= 0 ? '　·　' + c + ' 篇 MD' : ''))
+        .setIcon('lucide-folder')
+        .onClick(() => this.guard(async () => {
+          await this.setActiveVault(v.id);
+          await action(v);
+        })));
+    }
+    if (evt && typeof evt.clientX === 'number') {
+      menu.showAtMouseEvent(evt);
+      return;
+    }
+    let pos = { x: 160, y: 160 };
+    try {
+      const r = this.ribbonEl && this.ribbonEl.getBoundingClientRect();
+      if (r) pos = { x: Math.round(r.right + 8), y: Math.round(r.top) };
+    } catch (e) { /* noop */ }
+    menu.showAtPosition(pos);
+  }
+
   /** 移出 Vault 时选目标外部库：只有一个直接用，多个弹菜单 */
   pickTargetVault() {
     const list = this.externalVaultsList();
@@ -1708,9 +1787,18 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
 
   /** 切换当前外部库并确保目录存在 */
   async setActiveVault(id) {
+    if (this.settings.activeVaultId === id) return;
     this.settings.activeVaultId = id;
     await this.saveData(this.settings);
+    // 换了库：索引、名字缓存、排序缓存全部失效（索引文件也按库分开存）
+    this._indexCache = null;
+    this._indexByAbs = null;
+    this._hydratedFor = null;
+    this._sortedCache = null;
+    this._externalNameCache = null;
+    this._refIndex = new Map();
     this.ensureDirs();
+    this.refreshExternalPanels();
   }
 
   mdRel() { return this.activeVault().mdDir; }
@@ -1871,17 +1959,26 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
           if (fn) item.onClick(() => this.guard(fn));
         });
       };
-      add('打开库外文件', 'lucide-file-search', () => this.openExternalFilesModal({ mode: 'open' }));
-      add('打开面板', 'lucide-panel-right', () => this.activateExternalPanel());
-      add('打开附件目录', 'lucide-folder-open', () => this.revealExternalAssets());
-      add('新建笔记', 'lucide-file-plus', () => this.openNewNoteModal());
-      add('管理库外文件…', 'lucide-files', () => this.openExternalFilesModal());
-      add('清理孤儿附件…', 'lucide-trash-2', () => this.openOrphanAssetsModal());
+      const activeVault = this.activeVault();
+      const activeCount = this.peekVaultMdCount(activeVault);
+      add('当前：' + ((activeVault && activeVault.name) || 'External Vault') +
+        (activeCount >= 0 ? '　·　' + activeCount + ' 篇 MD' : ''), null, null, true);
+      menu.addSeparator();
+      // 多库时每个动作先选库；单库直接执行
+      const pick = (fn) => () => this.chooseVault(fn, evt);
+      add('打开库外文件', 'lucide-file-search',
+        pick(() => this.openExternalFilesModal({ mode: 'open' })));
+      add('打开面板', 'lucide-panel-right', pick(() => this.activateExternalPanel()));
+      add('打开附件目录', 'lucide-folder-open', pick(() => this.revealExternalAssets()));
+      add('新建笔记', 'lucide-file-plus', pick(() => this.openNewNoteModal()));
+      add('管理库外文件…', 'lucide-files', pick(() => this.openExternalFilesModal()));
+      add('清理孤儿附件…', 'lucide-trash-2', pick(() => this.openOrphanAssetsModal()));
       add('撤销上一次移动', 'lucide-undo-2', () => this.undoLastMove());
-      add('复制路径', 'lucide-copy', async () => {
-        await navigator.clipboard.writeText(mdDir);
-        if (this.settings.showNotice) new obsidian.Notice('已复制：' + mdDir);
-      });
+      add('复制路径', 'lucide-copy', pick(async () => {
+        const dir = this.externalMdDir();
+        await navigator.clipboard.writeText(dir);
+        if (this.settings.showNotice) new obsidian.Notice('已复制：' + dir);
+      }));
       menu.addSeparator();
       const notes = listExternalMdFiles(mdDir, this.settings.ribbonMaxNotes);
       if (!notes.length) {
@@ -1959,7 +2056,12 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
 
   externalIndexPath() {
     const root = vaultRoot(this.app);
-    return root ? path.join(root, '.obsidian', 'plugins', 'external-vault', 'index.json') : null;
+    if (!root) return null;
+    const vault = this.activeVault();
+    const id = String((vault && vault.id) || 'default').replace(/[^A-Za-z0-9_-]/g, '_');
+    // 默认库沿用 index.json（向后兼容），其他库各用一份，避免来回切换时互相覆盖
+    const name = id === 'default' ? 'index.json' : 'index-' + id + '.json';
+    return path.join(root, '.obsidian', 'plugins', 'external-vault', name);
   }
 
   async loadExternalIndex() {
@@ -5099,7 +5201,7 @@ class ExternalFileImageSettingTab extends obsidian.PluginSettingTab {
           this.display();
         }));
 
-    new obsidian.Setting(el)
+    const activeRow = new obsidian.Setting(el)
       .setName(tr('当前外部库'))
       .setDesc(tr('右侧面板、新建笔记、移出 Vault 都作用于这个库'))
       .addDropdown((d) => {
@@ -5107,6 +5209,12 @@ class ExternalFileImageSettingTab extends obsidian.PluginSettingTab {
         d.setValue(this.plugin.settings.activeVaultId || 'default')
           .onChange((v) => this.plugin.setActiveVault(v).then(() => this.display()));
       });
+    // 异步补上篇数，避免打开设置时卡住
+    this.plugin.countVaultMd(this.plugin.activeVault()).then((n) => {
+      if (n < 0) return;
+      activeRow.setDesc(tr('右侧面板、新建笔记、移出 Vault 都作用于这个库') +
+        '　·　' + n + tr(' 篇 MD'));
+    }).catch(() => {});
     el.createEl('p', {
       cls: 'setting-item-description',
       text: tr('编辑库外 MD 时，粘贴 / 拖入的附件自动存进库外附件目录并插入相对路径；库内笔记行为不变。'),
@@ -5190,7 +5298,7 @@ class ExternalFileImageSettingTab extends obsidian.PluginSettingTab {
     new obsidian.Setting(el).setName(tr('其他外部库')).setHeading();
     const extras = this.plugin.settings.externalVaults || [];
     for (const v of extras) {
-      new obsidian.Setting(el)
+      const vaultRow = new obsidian.Setting(el)
         .setName(v.name || v.id)
         .setDesc(tr('名称'))
         .addText((t) => t.setValue(v.name || '')
@@ -5203,6 +5311,10 @@ class ExternalFileImageSettingTab extends obsidian.PluginSettingTab {
           await save('externalVaults', this.plugin.settings.externalVaults);
           this.display();
         }));
+      this.plugin.countVaultMd(v).then((n) => {
+        if (n < 0) return;
+        vaultRow.setDesc(tr('名称') + '　·　' + n + tr(' 篇 MD'));
+      }).catch(() => {});
       new obsidian.Setting(el)
         .setName(tr('MD 目录'))
         .addText((t) => t.setValue(v.mdDir || '')
@@ -5686,6 +5798,10 @@ class ExternalVaultView extends obsidian.ItemView {
     const search = head.createEl('input', {
       type: 'search', placeholder: tr('搜索'),
     });
+    const countEl = head.createEl('span', { cls: 'ev-panel-count', text: '' });
+    this.plugin.countVaultMd().then((n) => {
+      if (n >= 0 && countEl.isConnected) countEl.setText(n + tr(' 篇'));
+    }).catch(() => {});
     search.value = this.query;
     let searchTimer = 0;
     search.addEventListener('input', () => {

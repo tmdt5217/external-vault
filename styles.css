@@ -142,6 +142,12 @@ span.cm-hmd-internal-link.ev-external-link .cm-underline,
 .ev-panel { padding: 8px; }
 .ev-panel-head { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; }
 .ev-panel-head input { flex: 1; min-width: 0; }
+.ev-panel-head .ev-panel-count {
+  flex: none;
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
 .ev-panel-actions { display: flex; gap: 4px; }
 .ev-panel-toolbar {
   display: flex;
