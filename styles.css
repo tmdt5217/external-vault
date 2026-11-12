@@ -389,20 +389,6 @@ body .ev-panel .nav-file-title.is-active::after {
   opacity: 0.5;
 }
 
-/* 拖动残影：只有文件名的小块（替代整行快照） */
-.ev-drag-ghost {
-  position: fixed;
-  left: -9999px;
-  top: -9999px;
-  padding: 4px 8px;
-  border-radius: var(--radius-s, 6px);
-  background: var(--background-secondary);
-  color: var(--text-normal);
-  font-size: 12px;
-  opacity: 0.92;
-  box-shadow: var(--shadow-s, 0 2px 8px rgba(0, 0, 0, 0.15));
-}
-
 /* 拖动到标签页时跟随光标的深色提示卡：图标 + 文件名 + 说明。
    注意：不能用 --text-on-accent 之类的主题变量——部分主题里它是深色，
    会导致黑底黑字（实测踩过）。这里固定用深色卡 + 白字，和原生提示一致。 */
@@ -446,4 +432,15 @@ body .ev-panel .nav-file-title.is-active::after {
   background-color: var(--background-modifier-hover);
   border-radius: var(--radius-s, 6px);
   box-shadow: inset 0 0 0 1px var(--background-modifier-border);
+}
+
+/* 拖到正文时，在插入位置画的闪烁竖线（原生由 CodeMirror drop cursor 提供） */
+.ev-drop-caret {
+  width: 2px;
+  border-radius: 1px;
+  background: var(--text-normal);
+  animation: ev-caret-blink 1s steps(1) infinite;
+}
+@keyframes ev-caret-blink {
+  50% { opacity: 0; }
 }

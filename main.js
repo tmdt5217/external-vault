@@ -279,6 +279,7 @@ const EN = {
   '移入 External Vault（含附件）': 'Move into External Vault (with attachments)',
   '在新标签页中打开': 'Open in new tab',
   '替换当前标签页': 'Replace current tab',
+  '在此处插入链接': 'Insert link here',
   '删除库外 MD（含附件）': 'Delete external note (with attachments)',
   ' 篇': ' notes',
   ' 篇 MD': ' MD notes',
@@ -1563,6 +1564,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
 
     this.patchOpenLinkText();
     this.patchFirstLinkpathDest();
+    this.patchLinkSuggestions();
     this.setupExternalLinkRendering();
     this.setupExternalTabBadge();
     // 预热外部文件名缓存，让裸 [[文件名]] 的 hover 预览能解析
@@ -3201,8 +3203,18 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
           candidates.push(path.resolve(vRoot, raw));
           candidates.push(path.resolve(baseDir, raw));
         }
+        // [[子目录/笔记]] 这种带目录的写法：再按外部库根目录找一次
+        const mdDirForRel = this.externalMdDir();
+        if (mdDirForRel) {
+          candidates.push(path.join(mdDirForRel, raw));
+          if (!/\.md$/i.test(raw)) candidates.push(path.join(mdDirForRel, raw + '.md'));
+        }
       }
       // 裸 [[文件名]]：库内找不到时，去外部库目录（含子目录缓存）里找
+      if (!/^file:/i.test(raw) && raw.includes('/')) {
+        const baseHit = this.findExternalByName(path.basename(raw));
+        if (baseHit) candidates.push(baseHit);
+      }
       if (!raw.includes('/') && !/^file:/i.test(raw)) {
         const mdDir = this.externalMdDir();
         if (mdDir) {
@@ -3413,6 +3425,47 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
    * 库外文件不在索引里，返回 null 就会被当成「未创建」。
    * 这里在找不到时补一个 TExternalFile，让它们走正常预览流程。
    */
+  /**
+   * 把库外 MD 追加进 Obsidian 原生 `[[` 补全。
+   * getLinkSuggestions() 返回的条目若没有 file，会被当成纯文本链接（[[名字]]）插入，
+   * 正好符合库外文件按文件名解析的方式；不新建 EditorSuggest，避免盖住库内联想。
+   */
+  patchLinkSuggestions() {
+    const mc = this.app.metadataCache;
+    if (!mc || typeof mc.getLinkSuggestions !== 'function' || mc.__evLinkSuggestPatched) return;
+    const orig = mc.getLinkSuggestions.bind(mc);
+    const self = this;
+    mc.getLinkSuggestions = function patchedGetLinkSuggestions(...args) {
+      let list = [];
+      try { list = orig(...args) || []; } catch (e) { list = []; }
+      try {
+        const extra = self.externalLinkSuggestEntries();
+        if (extra.length) list = list.concat(extra);
+      } catch (e) { /* noop */ }
+      return list;
+    };
+    mc.__evLinkSuggestPatched = true;
+    this.dbg('getLinkSuggestions 已并入库外笔记');
+  }
+
+  /** 给 [[ 补全用的库外条目：只要 path（不带扩展名），不要 file */
+  externalLinkSuggestEntries(limit) {
+    const max = typeof limit === 'number' ? limit : 50000;
+    const idx = this._indexCache && this._indexCache.data;
+    if (!idx || !Array.isArray(idx.files) || !idx.files.length) return [];
+    const out = [];
+    for (const f of idx.files) {
+      if (out.length >= max) break;
+      if (!f || f.kind !== 'md') continue;
+      let rel = String(f.rel || '');
+      if (!rel) continue;
+      rel = rel.replace(/\.(md|markdown)$/i, '');
+      if (!rel) continue;
+      out.push({ path: rel });
+    }
+    return out;
+  }
+
   patchFirstLinkpathDest() {
     try {
       const mc = this.app.metadataCache;
@@ -6094,6 +6147,7 @@ class ExternalVaultView extends obsidian.ItemView {
     const elOf = (e) => (e.target && e.target.closest ? e.target : null);
 
     let barEl = null;
+    let caretEl = null;
     let tipEl = null;
     let tipNameEl = null;
     let tipSubEl = null;
@@ -6120,7 +6174,12 @@ class ExternalVaultView extends obsidian.ItemView {
     const groupOf = (e) => {
       const t = elOf(e);
       if (!t || typeof t.closest !== 'function') return null;
-      return t.closest('.workspace-tabs');
+      // 注意：.workspace-tabs 包住了标签头和正文，必须限定在标签栏内，
+      // 否则拖到笔记正文里也会被当成“落在标签页上”。
+      const head = t.closest('.workspace-tab-header');
+      const bar = head ? null : t.closest('.workspace-tab-header-container');
+      if (!head && !bar) return null;
+      try { return (head || bar).closest('.workspace-tabs'); } catch (err) { return null; }
     };
 
     const readGeom = (group) => {
@@ -6195,6 +6254,25 @@ class ExternalVaultView extends obsidian.ItemView {
       barKey = '';
     };
     const hideTip = () => { try { if (tipEl) tipEl.style.display = 'none'; } catch (err) { /* noop */ } };
+    const hideCaret = () => { try { if (caretEl) caretEl.style.display = 'none'; } catch (err) { /* noop */ } };
+    // 在编辑器的落点位置画一条闪烁竖线（原生由 CodeMirror 的 drop cursor 提供）
+    const showCaret = (e) => {
+      try {
+        const view = this.plugin.markdownViewAt(e);
+        const cm = view && view.editor && view.editor.cm;
+        if (!cm || typeof cm.posAtCoords !== 'function' || typeof cm.coordsAtPos !== 'function') return false;
+        const pos = cm.posAtCoords({ x: e.clientX, y: e.clientY });
+        if (typeof pos !== 'number') return false;
+        const coords = cm.coordsAtPos(pos);
+        if (!coords) return false;
+        if (!caretEl) caretEl = ensureEl('ev-drop-caret');
+        caretEl.style.left = Math.round(coords.left) + 'px';
+        caretEl.style.top = Math.round(coords.top) + 'px';
+        caretEl.style.height = Math.max(12, Math.round(coords.bottom - coords.top)) + 'px';
+        caretEl.style.display = 'block';
+        return true;
+      } catch (err) { return false; }
+    };
     const hideChip = () => { /* 拖动图像由系统绘制，这里无需处理 */ };
 
     const paintBar = (geo) => {
@@ -6221,13 +6299,17 @@ class ExternalVaultView extends obsidian.ItemView {
           tipNameEl = tipEl.querySelector('.ev-drop-tip-name');
           tipSubEl = tipEl.querySelector('.ev-drop-tip-sub');
           const iconEl = tipEl.querySelector('.ev-drop-tip-icon');
-          if (iconEl && obsidian.setIcon) obsidian.setIcon(iconEl, 'lucide-file-text');
+          if (iconEl && obsidian.setIcon) {
+            try { obsidian.setIcon(iconEl, 'lucide-file-text'); } catch (e) { /* noop */ }
+          }
           if (tipSubEl) tipSubEl.textContent = tr('作为新的标签页打开');
         }
       }
       const name = this.plugin._dragLabel || '';
       if (tipNameEl && tipNameEl.textContent !== name) tipNameEl.textContent = name;
-      const sub = tr(mode === 'replace' ? '替换当前标签页' : '作为新的标签页打开');
+      const subText = mode === 'replace' ? '替换当前标签页'
+        : (mode === 'link' ? '在此处插入链接' : '作为新的标签页打开');
+      const sub = tr(subText);
       if (tipSubEl && tipSubEl.textContent !== sub) tipSubEl.textContent = sub;
       tipEl.style.left = (e.clientX + 18) + 'px';
       tipEl.style.top = (e.clientY + 20) + 'px';
@@ -6242,11 +6324,28 @@ class ExternalVaultView extends obsidian.ItemView {
       if (!hasDrag(e)) return false;
       const group = groupOf(e);
       if (!group) {
+        const t2 = elOf(e);
+        let inEditor = null;
+        try {
+          inEditor = t2 && typeof t2.closest === 'function' &&
+            (t2.closest('.cm-editor') || t2.closest('.markdown-source-view') || t2.closest('.markdown-preview-view'));
+        } catch (err) { inEditor = null; }
+        if (inEditor) {
+          e.preventDefault();
+          if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+        }
         const now = Date.now();
         if (now - lastPaint >= PAINT_MS) {
           lastPaint = now;
           hideBar();
-          hideTip();
+          clearReplace();
+          if (inEditor) {
+            paintTip(e, 'link');
+            if (!showCaret(e)) hideCaret();
+          } else {
+            hideTip();
+            hideCaret();
+          }
         }
         return false;
       }
@@ -6256,6 +6355,7 @@ class ExternalVaultView extends obsidian.ItemView {
       const now = Date.now();
       if (now - lastPaint < PAINT_MS) return true;
       lastPaint = now;
+      hideCaret();
       const g = readGeom(group);
       const hit = hitTarget(g.rects, g.heads, e.clientX);
       if (hit.mode === 'replace') {
@@ -6275,6 +6375,7 @@ class ExternalVaultView extends obsidian.ItemView {
       hideBar();
       hideTip();
       hideChip();
+      hideCaret();
       clearGeom();
       if (e.defaultPrevented) return false;
       let abs = '';
@@ -6315,6 +6416,7 @@ class ExternalVaultView extends obsidian.ItemView {
       hideBar();
       hideTip();
       hideChip();
+      hideCaret();
       clearReplace();
       clearGeom();
       this.plugin._dragAbs = '';
@@ -6638,20 +6740,22 @@ class ExternalVaultView extends obsidian.ItemView {
           // 记下拖动对象，dragover 阶段拿不到 getData，提示卡要用它显示文件名
           this.plugin._dragAbs = f.abs;
           this.plugin._dragLabel = path.basename(f.abs, path.extname(f.abs));
-          // 用真实的小块作为拖动图像：透明/极小占位会让 macOS 的拖拽会话抖动
+          // 拖动图像用透明占位：文件名已经在暗色提示卡里显示了，再画一个就是重复。
+          // 元素必须常驻到拖动结束之后（提前移除会让拖拽会话异常）。
           try {
-            let chip = this.plugin._dragChipEl;
-            if (!chip || !chip.isConnected) {
-              chip = document.createElement('div');
-              chip.className = 'ev-drag-ghost';
-              chip.style.position = 'fixed';
-              chip.style.left = '-9999px';
-              chip.style.top = '-9999px';
-              document.body.appendChild(chip);
-              this.plugin._dragChipEl = chip;
+            let img = this.plugin._dragImageEl;
+            if (!img || !img.isConnected) {
+              img = document.createElement('div');
+              img.style.position = 'fixed';
+              img.style.left = '-9999px';
+              img.style.top = '-9999px';
+              img.style.width = '2px';
+              img.style.height = '2px';
+              img.style.opacity = '0';
+              document.body.appendChild(img);
+              this.plugin._dragImageEl = img;
             }
-            chip.textContent = this.plugin._dragLabel || '';
-            e.dataTransfer.setDragImage(chip, 12, 12);
+            e.dataTransfer.setDragImage(img, 0, 0);
           } catch (err) { /* noop */ }
           try { console.log(LOG, 'dragstart：自定义拖拽'); } catch (e2) { /* noop */ }
           title.classList.add('is-dragging');
