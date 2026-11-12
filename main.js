@@ -277,6 +277,8 @@ const EN = {
   '移出 Vault（含附件）': 'Move out of vault (with attachments)',
   '移入 Vault（含附件）': 'Move into vault (with attachments)',
   '移入 External Vault（含附件）': 'Move into External Vault (with attachments)',
+  '在新标签页中打开': 'Open in new tab',
+  '替换当前标签页': 'Replace current tab',
   '删除库外 MD（含附件）': 'Delete external note (with attachments)',
   ' 篇': ' notes',
   ' 篇 MD': ' MD notes',
@@ -752,6 +754,19 @@ function formatLinkTarget(rel, style) {
   // angle：保留中文和空格的可读性，只转义必须转义的字符
   const encoded = rel.split('/').map(core).join('/');
   return /[\s()<>]/.test(encoded) ? '<' + encoded + '>' : encoded;
+}
+
+/**
+ * 只有落在「库内文件列表」上才算移动到库内。
+ * 外库面板的列表复用了 nav-files-container 这个 class 做样式，
+ * 必须排除掉，否则在面板里稍微拖一下就误判为拖进库内。
+ */
+function isVaultExplorerDropTarget(el) {
+  if (!el || typeof el.closest !== 'function') return false;
+  const nav = el.closest('.nav-files-container');
+  if (!nav) return false;
+  if (typeof nav.closest === 'function' && nav.closest('.ev-panel')) return false;
+  return true;
 }
 
 /** 从任意起点计算指向目标的相对链接（逐段编码，类方法与纯函数共用） */
@@ -3642,6 +3657,18 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
   async handleDrop(e) {
     const dt = e.dataTransfer;
     if (!dt) return;
+    // 面板里拖出来的库外笔记：在光标处插入指向它的相对链接。
+    // 注意不能走 contextFor——那个只认库外视图，拖进库内笔记会失效。
+    let draggedAbs = '';
+    try { draggedAbs = dt.getData('application/x-external-vault') || ''; } catch (err) { draggedAbs = ''; }
+    if (draggedAbs) {
+      const targetView = this.markdownViewAt(e);
+      if (targetView) {
+        this.stop(e);
+        this.insertExternalLinkText({ view: targetView }, draggedAbs, e);
+        return;
+      }
+    }
     const files = this.attachmentsFrom(dt);
     if (!files.length) return;
     const ctx = this.contextFor(e);
@@ -3651,6 +3678,48 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     const pos = this.dropPosition(ctx.view, e);
     this.dbg('drop', files.map((f) => f.name), '→', this.imageDirFor(ctx), 'pos=', pos);
     await this.saveAndInsert(ctx, files, pos);
+  }
+
+  /** 找到事件落点所属的 Markdown 视图（库内、库外都算） */
+  markdownViewAt(e) {
+    let t = e && e.target;
+    const doc = typeof document !== 'undefined' ? document : null;
+    if (doc && (!t || t === doc.body || t === doc.documentElement)) t = doc.activeElement || t;
+    if (!t || !t.nodeType) return null;
+    let found = null;
+    try {
+      this.app.workspace.iterateAllLeaves((leaf) => {
+        if (found || !leaf) return;
+        const v = leaf.view;
+        if (!v || !v.editor || !v.containerEl) return;
+        try { if (v.containerEl.contains(t)) found = v; } catch (err) { /* noop */ }
+      });
+    } catch (err) { /* noop */ }
+    return found;
+  }
+
+  /** 在编辑器落点插入指向库外文件的相对链接（图片用 ![]） */
+  insertExternalLinkText(ctx, abs, e) {
+    try {
+      const view = ctx && ctx.view;
+      if (!view || !view.editor) return false;
+      const vRoot = vaultRoot(this.app);
+      const active = view.file || this.app.workspace.getActiveFile();
+      const fromAbs = active
+        ? (externalAbsFromFile(active, this.app) ||
+          (vRoot && active.path ? path.resolve(vRoot, active.path) : null))
+        : null;
+      if (!fromAbs) return false;
+      const label = path.basename(abs, path.extname(abs));
+      const link = this.externalLinkFromAbs(abs, fromAbs);
+      const text = isImageFile({ name: abs })
+        ? '![' + label + '](' + link + ')'
+        : '[' + label + '](' + link + ')';
+      const pos = e ? this.dropPosition(view, e) : null;
+      if (pos) view.editor.replaceRange(text, pos);
+      else view.editor.replaceSelection(text);
+      return true;
+    } catch (err) { this.dbg('插入库外链接失败', err.message); return false; }
   }
 
   dropPosition(view, e) {
@@ -4581,6 +4650,35 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
   }
 
   /** 把已有标签页切换到库外文件（移出 Vault 时用，避免关标签造成跳动） */
+  /**
+   * 在“新的标签页”里打开库外文件，行为对齐内库笔记拖到标签页上的效果：
+   * 不替换目标标签页，而是在它旁边新开一个。
+   */
+  async openExternalInNewTab(abs, nearLeaf, index) {
+    let leaf = null;
+    try {
+      const parent = nearLeaf && nearLeaf.parent;
+      if (parent && typeof this.app.workspace.createLeafInParent === 'function') {
+        const children = Array.isArray(parent.children) ? parent.children : [];
+        let at = children.length;
+        if (Number.isInteger(index)) at = Math.max(0, Math.min(index, children.length));
+        else if (nearLeaf) at = Math.max(0, children.indexOf(nearLeaf) + 1);
+        leaf = this.app.workspace.createLeafInParent(parent, at);
+      }
+    } catch (e) { leaf = null; }
+    if (!leaf) {
+      try {
+        if (nearLeaf && typeof this.app.workspace.setActiveLeaf === 'function') {
+          this.app.workspace.setActiveLeaf(nearLeaf, { focus: false });
+        }
+        leaf = this.app.workspace.getLeaf('tab');
+      } catch (e) { leaf = null; }
+    }
+    if (leaf && await this.openExternalInLeaf(leaf, abs)) return true;
+    await this.openExternalMd(abs);
+    return true;
+  }
+
   async openExternalInLeaf(leaf, abs) {
     if (!leaf || typeof leaf.openFile !== 'function' || !abs) return false;
     try {
@@ -5955,6 +6053,7 @@ class ExternalVaultView extends obsidian.ItemView {
 
   async onOpen() {
     this.render();
+    this.setupTabDrop();
     await this.refresh();
     // 等视图标题栏渲染完成后再插入，否则 querySelector 可能拿不到 .view-header
     window.setTimeout(() => {
@@ -5974,6 +6073,300 @@ class ExternalVaultView extends obsidian.ItemView {
     this.registerInterval(window.setInterval(() => {
       this.refresh().catch(() => {});
     }, 30000));
+  }
+
+  /**
+   * 面板里的笔记拖到标签页：直接在那个标签页里打开。
+   * 面板行 dragstart 会写入 application/x-external-vault（绝对路径）。
+   */
+  setupTabDrop() {
+    if (this._tabDropBound) return;
+    this._tabDropBound = true;
+    const MIME = 'application/x-external-vault';
+    const BAR_W = 4;
+    const PAINT_MS = 30; // 视觉更新限频，dragover 每秒几十次，不能每次都重排
+
+    const hasDrag = (e) => {
+      try {
+        return Array.from((e.dataTransfer && e.dataTransfer.types) || []).indexOf(MIME) !== -1;
+      } catch (err) { return false; }
+    };
+    const elOf = (e) => (e.target && e.target.closest ? e.target : null);
+
+    let barEl = null;
+    let tipEl = null;
+    let tipNameEl = null;
+    let tipSubEl = null;
+
+    let barKey = '';
+    let lastPaint = 0;
+    let lastOver = 0;
+
+    // 同一次拖动里标签页不会动：几何量只读一次
+    let geom = null;
+    const clearGeom = () => { geom = null; };
+
+    const ensureEl = (cls) => {
+      const node = document.createElement('div');
+      node.className = cls;
+      node.style.position = 'fixed';
+      node.style.zIndex = '9999';
+      node.style.pointerEvents = 'none';
+      node.style.display = 'none';
+      document.body.appendChild(node);
+      return node;
+    };
+
+    const groupOf = (e) => {
+      const t = elOf(e);
+      if (!t || typeof t.closest !== 'function') return null;
+      return t.closest('.workspace-tabs');
+    };
+
+    const readGeom = (group) => {
+      if (geom && geom.group === group) return geom;
+      let heads = [];
+      try { heads = Array.from(group.querySelectorAll('.workspace-tab-header')); }
+      catch (err) { heads = []; }
+      const rects = heads.map((h) => {
+        try { return h.getBoundingClientRect(); } catch (err) { return null; }
+      });
+      geom = { group, heads, rects };
+      return geom;
+    };
+
+    const insertIndex = (rects, x) => {
+      for (let i = 0; i < rects.length; i += 1) {
+        const r = rects[i];
+        if (!r) continue;
+        if (x < r.left + r.width / 2) return i;
+      }
+      return rects.length;
+    };
+
+    // 落在标签中间 50% → 替换该标签；落在左右边缘 25% 或缝隙 → 插入新标签
+    const hitTarget = (rects, heads, x) => {
+      for (let i = 0; i < rects.length; i += 1) {
+        const r = rects[i];
+        if (!r) continue;
+        if (x >= r.left && x <= r.right) {
+          const p = (x - r.left) / Math.max(1, r.width);
+          if (p < 0.25) return { mode: 'insert', idx: i, head: null };
+          if (p > 0.75) return { mode: 'insert', idx: i + 1, head: null };
+          return { mode: 'replace', idx: i, head: heads[i] };
+        }
+      }
+      return { mode: 'insert', idx: insertIndex(rects, x), head: null };
+    };
+
+    const barGeometry = (rects, idx) => {
+      const first = rects.find((r) => r);
+      if (!first) return null;
+      let center;
+      if (idx <= 0) center = first.left - 4;
+      else if (idx >= rects.length) {
+        const last = rects[rects.length - 1];
+        center = (last ? last.right : first.right) + 4;
+      } else {
+        const prev = rects[idx - 1];
+        const next = rects[idx];
+        center = prev && next ? (prev.right + next.left) / 2 : next.left;
+      }
+      const h = Math.max(16, Math.round(first.height * 0.8));
+      return { x: center - BAR_W / 2, y: first.top + Math.round((first.height - h) / 2), h };
+    };
+
+    let replaceEl = null;
+    const clearReplace = () => {
+      try {
+        if (replaceEl) replaceEl.classList.remove('ev-tab-replace');
+      } catch (err) { /* noop */ }
+      replaceEl = null;
+    };
+    const showReplace = (head) => {
+      if (replaceEl === head) return;
+      clearReplace();
+      try { head.classList.add('ev-tab-replace'); } catch (err) { /* noop */ }
+      replaceEl = head;
+    };
+
+    const hideBar = () => {
+      try { if (barEl) barEl.style.display = 'none'; } catch (err) { /* noop */ }
+      barKey = '';
+    };
+    const hideTip = () => { try { if (tipEl) tipEl.style.display = 'none'; } catch (err) { /* noop */ } };
+    const hideChip = () => { /* 拖动图像由系统绘制，这里无需处理 */ };
+
+    const paintBar = (geo) => {
+      if (!geo) return;
+      const key = Math.round(geo.x) + ':' + Math.round(geo.y) + ':' + geo.h;
+      if (key === barKey) return;
+      barKey = key;
+      if (!barEl) barEl = ensureEl('ev-tab-insert');
+      barEl.style.left = Math.round(geo.x) + 'px';
+      barEl.style.top = Math.round(geo.y) + 'px';
+      barEl.style.height = geo.h + 'px';
+      barEl.style.display = 'block';
+    };
+
+    const paintTip = (e, mode) => {
+      if (!tipEl) {
+        tipEl = ensureEl('ev-drop-tip');
+        tipEl.innerHTML = '<span class="ev-drop-tip-icon"></span>' +
+          '<span class="ev-drop-tip-text">' +
+          '<span class="ev-drop-tip-name"></span>' +
+          '<span class="ev-drop-tip-sub"></span>' +
+          '</span>';
+        if (typeof tipEl.querySelector === 'function') {
+          tipNameEl = tipEl.querySelector('.ev-drop-tip-name');
+          tipSubEl = tipEl.querySelector('.ev-drop-tip-sub');
+          const iconEl = tipEl.querySelector('.ev-drop-tip-icon');
+          if (iconEl && obsidian.setIcon) obsidian.setIcon(iconEl, 'lucide-file-text');
+          if (tipSubEl) tipSubEl.textContent = tr('作为新的标签页打开');
+        }
+      }
+      const name = this.plugin._dragLabel || '';
+      if (tipNameEl && tipNameEl.textContent !== name) tipNameEl.textContent = name;
+      const sub = tr(mode === 'replace' ? '替换当前标签页' : '作为新的标签页打开');
+      if (tipSubEl && tipSubEl.textContent !== sub) tipSubEl.textContent = sub;
+      tipEl.style.left = (e.clientX + 18) + 'px';
+      tipEl.style.top = (e.clientY + 20) + 'px';
+      tipEl.style.display = 'flex';
+    };
+
+
+    const onDragOver = (e) => {
+      if (e.__evTabOver) return false;
+      lastOver = Date.now();
+      e.__evTabOver = true;
+      if (!hasDrag(e)) return false;
+      const group = groupOf(e);
+      if (!group) {
+        const now = Date.now();
+        if (now - lastPaint >= PAINT_MS) {
+          lastPaint = now;
+          hideBar();
+          hideTip();
+        }
+        return false;
+      }
+      // 必须在事件里同步阻止默认行为，drop 才会发生
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+      const now = Date.now();
+      if (now - lastPaint < PAINT_MS) return true;
+      lastPaint = now;
+      const g = readGeom(group);
+      const hit = hitTarget(g.rects, g.heads, e.clientX);
+      if (hit.mode === 'replace') {
+        hideBar();
+        showReplace(hit.head);
+      } else {
+        clearReplace();
+        paintBar(barGeometry(g.rects, hit.idx));
+      }
+      paintTip(e, hit.mode);
+      return true;
+    };
+
+    const onDrop = (e) => {
+      if (e.__evTabDrop) return false;
+      e.__evTabDrop = true;
+      hideBar();
+      hideTip();
+      hideChip();
+      clearGeom();
+      if (e.defaultPrevented) return false;
+      let abs = '';
+      try { abs = (e.dataTransfer && e.dataTransfer.getData(MIME)) || ''; } catch (err) { abs = ''; }
+      if (!abs) return false;
+      const group = groupOf(e);
+      if (!group) return false;
+      const g = readGeom(group);
+      const hit = hitTarget(g.rects, g.heads, e.clientX);
+      e.preventDefault();
+      e.stopPropagation();
+      let leaf = null;
+      try {
+        this.app.workspace.iterateAllLeaves((l) => {
+          if (leaf || !l || !l.tabHeaderEl) return;
+          if (hit.mode === 'replace' ? l.tabHeaderEl === hit.head : g.heads.indexOf(l.tabHeaderEl) !== -1) {
+            leaf = l;
+          }
+        });
+      } catch (err) { /* noop */ }
+      clearReplace();
+      try {
+        console.log(LOG, '库外笔记放下：', abs, hit.mode === 'replace' ? '替换标签页' : ('插入第 ' + hit.idx + ' 位'));
+      } catch (err) { /* noop */ }
+      if (hit.mode === 'replace' && leaf) {
+        this.plugin.guard(async () => {
+          if (await this.plugin.openExternalInLeaf(leaf, abs)) return;
+          // 替换失败（极端情况）再退回新标签页
+          await this.plugin.openExternalInNewTab(abs, leaf, hit.idx + 1);
+        });
+      } else {
+        this.plugin.guard(() => this.plugin.openExternalInNewTab(abs, leaf, hit.idx));
+      }
+      return true;
+    };
+
+    const onDragEnd = () => {
+      hideBar();
+      hideTip();
+      hideChip();
+      clearReplace();
+      clearGeom();
+      this.plugin._dragAbs = '';
+      this.plugin._dragLabel = '';
+      if (this._refreshPending) {
+        this._refreshPending = false;
+        window.setTimeout(() => { this.refresh().catch(() => {}); }, 80);
+      }
+    };
+
+    this._tabDropHandlers = { dragover: onDragOver, drop: onDrop, dragend: onDragEnd, cleanup: () => { onDragEnd(); } };
+
+    // drop / dragend 有时不会触发（拖动被系统或其它插件打断），这里做兜底清理，
+    // 否则提示卡会一直挂在界面上。
+    const safeCleanup = () => {
+      if (!lastOver || Date.now() - lastOver > 1200) return;
+      lastOver = 0;
+      onDragEnd();
+    };
+    try {
+      if (typeof this.registerDomEvent === 'function') {
+        this.registerDomEvent(document, 'mouseup', safeCleanup, true);
+        this.registerDomEvent(document, 'keydown', (e) => {
+          if (e && (e.key === 'Escape' || e.keyCode === 27)) onDragEnd();
+        }, true);
+        this.registerDomEvent(window, 'blur', () => onDragEnd(), true);
+        this.registerInterval(window.setInterval(() => {
+          // 拖动结束后 1.2 秒还没清理，就强制收掉
+          if (lastOver && Date.now() - lastOver > 1500) { lastOver = 0; onDragEnd(); }
+        }, 1000));
+      }
+    } catch (err) { /* noop */ }
+
+    const regWin = (type, fn) => {
+      try {
+        if (typeof this.registerDomEvent === 'function' && typeof window !== 'undefined') {
+          this.registerDomEvent(window, type, fn, true);
+        }
+      } catch (err) { /* noop */ }
+    };
+    const reg = (type, fn) => {
+      try {
+        if (typeof this.registerDomEvent === 'function') this.registerDomEvent(document, type, fn, true);
+      } catch (err) { /* noop */ }
+    };
+    regWin('dragover', onDragOver);
+    regWin('drop', onDrop);
+    regWin('dragend', onDragEnd);
+    reg('dragover', onDragOver);
+    reg('drop', onDrop);
+    reg('dragend', onDragEnd);
+    try { console.log(LOG, 'tab-drop 已就绪'); } catch (err) { /* noop */ }
   }
 
   /** 把按钮放进视图标题栏、文件夹图标右侧，随标题栏一起显示/折叠 */
@@ -6008,6 +6401,11 @@ class ExternalVaultView extends obsidian.ItemView {
   }
 
   async refresh() {
+    // 正在拖拽时不重建列表：被拖的那个节点一旦被替换，Chromium 的拖拽会话会卡住
+    if (this.plugin._dragAbs) {
+      this._refreshPending = true;
+      return;
+    }
     try { this.files = await this.plugin.listExternalEntries(); }
     catch (e) { this.files = []; }
     this.renderList();
@@ -6101,8 +6499,7 @@ class ExternalVaultView extends obsidian.ItemView {
         } catch (err) { /* noop */ }
         return;
       }
-      const nav = e.target && e.target.closest ? e.target.closest('.nav-files-container') : null;
-      if (!nav) return;
+      if (!isVaultExplorerDropTarget(e.target)) return;
       e.preventDefault();
       e.stopPropagation();
       const file = { path: 'file:' + abs, extension: 'md', getRealPath: () => abs };
@@ -6218,20 +6615,45 @@ class ExternalVaultView extends obsidian.ItemView {
       title.setAttribute('draggable', 'true');
       title.addEventListener('dragstart', (e) => {
         try {
+          if (!e.dataTransfer) return;
+          // 没有活动 Markdown 时也要能拖（拖到标签页打开）；此时 text/plain 用绝对路径
           const active = this.app.workspace.getActiveFile();
-          if (!active || !e.dataTransfer) { e.preventDefault(); return; }
           const vRoot = vaultRoot(this.app);
-          const fromAbs = externalAbsFromFile(active, this.app) ||
-            (vRoot && active.path ? path.resolve(vRoot, active.path) : null);
-          if (!fromAbs) { e.preventDefault(); return; }
-          const link = this.plugin.externalLinkFromAbs(f.abs, fromAbs);
-          const label = path.basename(f.abs, path.extname(f.abs));
-          const text = f.kind === 'image'
-            ? '![' + label + '](' + link + ')'
-            : '[' + label + '](' + link + ')';
-          e.dataTransfer.setData('text/plain', text);
+          const fromAbs = active
+            ? (externalAbsFromFile(active, this.app) ||
+              (vRoot && active.path ? path.resolve(vRoot, active.path) : null))
+            : null;
+          // 优先用 Obsidian 原生拖拽：这样标签页/分屏/编辑器的行为与库内笔记完全一致
+          const unix = String(f.abs).split(path.sep).join('/');
+          let tf = null;
+          try {
+            const v = this.plugin.app.vault;
+            tf = v.getFileByPath('file:' + unix) || v.getAbstractFileByPath('file:' + unix) || null;
+          } catch (err) { tf = null; }
+          const dm = this.plugin.app.dragManager;
+          // 只发自定义类型：一旦提供 text/plain，Obsidian 的标签页处理就会拿它去开文件，
+          // 生成一个打不开的标签页（实测 dragManager 还会把我们的数据整体冲掉）
           e.dataTransfer.setData('application/x-external-vault', f.abs);
           e.dataTransfer.effectAllowed = 'copyMove';
+          // 记下拖动对象，dragover 阶段拿不到 getData，提示卡要用它显示文件名
+          this.plugin._dragAbs = f.abs;
+          this.plugin._dragLabel = path.basename(f.abs, path.extname(f.abs));
+          // 用真实的小块作为拖动图像：透明/极小占位会让 macOS 的拖拽会话抖动
+          try {
+            let chip = this.plugin._dragChipEl;
+            if (!chip || !chip.isConnected) {
+              chip = document.createElement('div');
+              chip.className = 'ev-drag-ghost';
+              chip.style.position = 'fixed';
+              chip.style.left = '-9999px';
+              chip.style.top = '-9999px';
+              document.body.appendChild(chip);
+              this.plugin._dragChipEl = chip;
+            }
+            chip.textContent = this.plugin._dragLabel || '';
+            e.dataTransfer.setDragImage(chip, 12, 12);
+          } catch (err) { /* noop */ }
+          try { console.log(LOG, 'dragstart：自定义拖拽'); } catch (e2) { /* noop */ }
           title.classList.add('is-dragging');
         } catch (err) { /* noop */ }
       });
@@ -6257,6 +6679,10 @@ class ExternalVaultView extends obsidian.ItemView {
     if (f.kind === 'md') {
       menu.addItem((i) => i.setTitle(tr('重命名')).setIcon('lucide-pencil')
         .onClick(() => this.plugin.guard(() => this.plugin.renameExternalFile(f.abs))));
+    }
+    if (f.kind === 'md') {
+      menu.addItem((i) => i.setTitle(tr('在新标签页中打开')).setIcon('lucide-external-link')
+        .onClick(() => this.plugin.guard(() => this.plugin.openExternalInNewTab(f.abs))));
     }
     menu.addItem((i) => i.setTitle(tr('在 Finder 中显示')).setIcon('lucide-folder-open')
       .onClick(() => this.plugin.guard(() => this.plugin.revealExternalFile(f.abs))));
@@ -6304,4 +6730,5 @@ class ExternalVaultView extends obsidian.ItemView {
 
 module.exports = ExternalFileImagePlugin;
 
+/* nosourcemap */
 /* nosourcemap */
