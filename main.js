@@ -1326,6 +1326,21 @@ function parseFrontmatterAliases(text) {
   return Array.from(new Set(out));
 }
 
+async function readFileHead(abs, maxBytes) {
+  const limit = typeof maxBytes === 'number' ? maxBytes : 4096;
+  let fh = null;
+  try {
+    fh = await fs.promises.open(abs, 'r');
+    const buf = Buffer.alloc(limit);
+    const r = await fh.read(buf, 0, limit, 0);
+    return buf.toString('utf8', 0, r.bytesRead || 0);
+  } catch (e) {
+    return '';
+  } finally {
+    if (fh) { try { await fh.close(); } catch (e) { /* noop */ } }
+  }
+}
+
 async function listMarkdownFiles(dir, recursive, maxDepth) {
   const out = [];
   const limit = typeof maxDepth === 'number' ? maxDepth : 5;
@@ -1565,6 +1580,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     this.patchOpenLinkText();
     this.patchFirstLinkpathDest();
     this.patchLinkSuggestions();
+    this.patchFileToLinktext();
     this.setupExternalLinkRendering();
     this.setupExternalTabBadge();
     // 预热外部文件名缓存，让裸 [[文件名]] 的 hover 预览能解析
@@ -2227,7 +2243,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       this._indexByAbs = { src: idx.files, map: m };
     }
     const byAbs = this._indexByAbs.map;
-    const light = idx.files.length > SCAN_LIGHT_LIMIT;
+    const light = this._lightOverride === true || idx.files.length > SCAN_LIGHT_LIMIT;
     let touched = false;
     for (const raw of rels) {
       const rel = String(raw || '').replace(/\\/g, '/');
@@ -2244,6 +2260,14 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
           // 同步从索引数组里删掉，否则删除的笔记会一直留到下次全量扫描
           const at = idx.files.indexOf(cur);
           if (at !== -1) idx.files.splice(at, 1);
+          if (this._externalNameCache) {
+            const base = path.basename(abs, path.extname(abs));
+            if (this._externalNameCache.get(base) === abs) this._externalNameCache.delete(base);
+            for (const a of (cur.aliases || [])) {
+              const k = String(a || '').trim();
+              if (k && this._externalNameCache.get(k) === abs) this._externalNameCache.delete(k);
+            }
+          }
           this._indexAbsSet = null;
           touched = true;
         }
@@ -2271,6 +2295,13 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       entry.mtime = st.mtimeMs;
       entry.size = st.size;
       entry.ctime = st.birthtimeMs || entry.ctime || 0;
+      if (isMd && light) {
+        try {
+          const head = await readFileHead(abs, 4096);
+          entry.aliases = parseFrontmatterAliases(head);
+          entry.links = undefined;
+        } catch (e) { /* noop */ }
+      }
       if (isMd && !light) {
         try {
           const text = await fs.promises.readFile(abs, 'utf8');
@@ -2294,6 +2325,8 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     }
     if (!touched) return;
     this._sortedCache = null;
+    // 条目有增删时 [[ 补全的缓存必须失效（数组是原地修改，身份不变）
+    this._linkSuggestCache = null;
     if (this._externalNameCache) {
       for (const raw of rels) {
         const abs = path.resolve(mdDir, String(raw || '').replace(/\\/g, '/'));
@@ -2502,8 +2535,10 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     try { mdList = await listMarkdownFiles(mdDir, true, 8); } catch (e) { mdList = []; }
     // 5 万篇以上不再逐篇读正文：200k × 30KB ≈ 6GB，主线程会卡死。
     // 轻量模式只索引路径/时间/大小（assets=-1 表示未知），保证浏览、搜索、打开、移动可用。
-    const light = mdList.length > SCAN_LIGHT_LIMIT;
+    const light = this._lightOverride === true || mdList.length > SCAN_LIGHT_LIMIT;
     if (light) this.dbg('外部库 ' + mdList.length + ' 篇，使用轻量索引（不读正文）');
+    // 第一阶段：只 stat（快），并算出哪些文件需要读
+    const mdStats = [];
     for (const abs of mdList) {
       done += 1;
       if (done % 250 === 0) {
@@ -2516,22 +2551,68 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       const prev = prevMap.get(key);
       const mtime = st ? st.mtimeMs : 0;
       const size = st ? st.size : 0;
-      const changed = !prev || prev.mtime !== mtime || prev.size !== size;
-      // 未改动就直接复用上次结果，绝不重复读盘
+      mdStats.push({
+        abs,
+        key,
+        prev,
+        mtime,
+        size,
+        ctime: st ? st.birthtimeMs : 0,
+        changed: !prev || prev.mtime !== mtime || prev.size !== size,
+        head: null,
+        text: null,
+      });
+    }
+
+    // 第二阶段：批量读取。
+    //  - 轻量模式只读前 4 KB（frontmatter，取别名）；
+    //  - 完整模式读全文（取别名/链接/附件数）。
+    // 顺序 await 的话每篇是 3 次 syscall 的往返，20 万篇要 20 多秒；并发 32 大约快一倍。
+    const READ_CONCURRENCY = 32;
+    if (light) {
+      const need = mdStats.filter((it) => !it.prev || it.changed || !Array.isArray(it.prev.aliases));
+      for (let i = 0; i < need.length; i += READ_CONCURRENCY) {
+        const chunk = need.slice(i, i + READ_CONCURRENCY);
+        await Promise.all(chunk.map(async (it) => {
+          try { it.head = await readFileHead(it.abs, 4096); } catch (e) { it.head = ''; }
+        }));
+        if (i % (READ_CONCURRENCY * 8) === 0) await yieldToUI();
+      }
+    } else {
+      const need = mdStats.filter((it) => it.changed);
+      for (let i = 0; i < need.length; i += 8) {
+        const chunk = need.slice(i, i + 8);
+        await Promise.all(chunk.map(async (it) => {
+          try { it.text = await fs.promises.readFile(it.abs, 'utf8'); } catch (e) { it.text = null; }
+        }));
+        if (i % 400 === 0) await yieldToUI();
+      }
+    }
+
+    // 第三阶段：组装条目
+    for (const it of mdStats) {
+      const { abs, key, prev, mtime, size } = it;
       let assets = prev && typeof prev.assets === 'number' ? prev.assets : -1;
       let aliases = prev ? (prev.aliases || []) : [];
       let links = prev ? (prev.links || []) : [];
-      if (changed && !light) {
-        try {
-          const text = await fs.promises.readFile(abs, 'utf8');
-          aliases = parseFrontmatterAliases(text);
-          links = extractLinkNames(text);
-          assets = 0;
-          for (const it of collectLocalAssets(text, abs, null)) {
-            if (isInsideVault(it.abs, this.app) || !fs.existsSync(it.abs)) continue;
-            assets += 1;
+      if (light) {
+        if (it.head !== null) aliases = parseFrontmatterAliases(it.head);
+        links = [];
+        assets = -1;
+      } else if (it.changed) {
+        if (it.text !== null) {
+          try {
+            aliases = parseFrontmatterAliases(it.text);
+            links = extractLinkNames(it.text);
+            assets = 0;
+            for (const a of collectLocalAssets(it.text, abs, null)) {
+              if (isInsideVault(a.abs, this.app) || !fs.existsSync(a.abs)) continue;
+              assets += 1;
+            }
+          } catch (e) {
+            assets = -1;
           }
-        } catch (e) {
+        } else {
           assets = -1;
         }
       }
@@ -2540,10 +2621,10 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
         abs,
         rel: path.relative(mdDir, abs).split(path.sep).join('/'),
         mtime,
-        ctime: st ? st.birthtimeMs : 0,
+        ctime: it.ctime,
         size,
         assets,
-        aliases: light ? undefined : aliases,
+        aliases,
         links: light ? undefined : links,
         kind: 'md',
       });
@@ -2678,15 +2759,24 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     const idx = this._indexCache && this._indexCache.data;
     if (!idx || !Array.isArray(idx.files)) return false;
     const now = Date.now();
-    if (this._lastReconcile && now - this._lastReconcile < 60000) return true;
+    // 有过未处理的 watcher 变更时，不能靠“刚校准过”跳过
+    if (!this._indexStale && this._lastReconcile && now - this._lastReconcile < 60000) return true;
+    // 目录临时不可用（同步盘未挂载、被移走）时绝不能把“看不到”当成“全删了”
+    const mdDir = this.externalMdDir();
+    if (!mdDir || !fs.existsSync(mdDir)) {
+      this.dbg('外部库目录不存在，跳过校准');
+      return false;
+    }
     // 本次会话第一次、被标记过期、或索引超过 10 分钟：做一次全量 stat（准确）
     const needFull = !this._sessionReconciled || this._indexStale || now - (idx.built || 0) > 10 * 60 * 1000;
     if (!needFull) {
       // 之后只做 readdir 差量：增/删用路径集合比对，改动交给 watcher
       try {
-        await this.reconcileExternalDiff(idx);
-        this._lastReconcile = Date.now();
-        return true;
+        const diffed = await this.reconcileExternalDiff(idx);
+        if (diffed !== false) {
+          this._lastReconcile = Date.now();
+          return true;
+        }
       } catch (e) {
         this.dbg('差量校准失败，退回全量', e.message);
       }
@@ -2712,40 +2802,44 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     }
   }
 
-  /** 递归列出目录下所有文件（只 readdir，不 stat） */
-  async walkExternalEntries(dir, maxDepth) {
+  /** 递归列出目录下的非 MD 文件（不限深度，只看 readdir，不 stat）。
+   *  口径必须与 scanExternalFiles 一致：跳过隐藏项、跳过 MD（MD 由 listMarkdownFiles 负责）。 */
+  async walkNonMdFiles(dir) {
     const out = [];
-    const limit = typeof maxDepth === 'number' ? maxDepth : 8;
-    const walk = async (d, level) => {
-      if (level > limit) return;
+    const stack = [dir];
+    while (stack.length) {
+      const d = stack.pop();
       let entries = [];
       try { entries = await fs.promises.readdir(d, { withFileTypes: true }); }
-      catch (e) { return; }
+      catch (e) { continue; }
       for (const en of entries) {
         if (en.name.startsWith('.')) continue;
         const p = path.join(d, en.name);
-        if (en.isDirectory()) { await walk(p, level + 1); continue; }
-        if (en.isFile()) out.push(p);
+        if (en.isDirectory()) { stack.push(p); continue; }
+        if (!en.isFile() || isMdPath(en.name)) continue;
+        out.push(p);
       }
-    };
-    await walk(dir, 0);
+    }
     return out;
   }
 
   /** readdir 差量校准：新增的 stat 入库，消失的移除，其他不动（改动由 watcher 负责） */
   async reconcileExternalDiff(idx) {
     const mdDir = this.externalMdDir();
-    if (!mdDir) return false;
-    const roots = [mdDir];
+    if (!mdDir || !fs.existsSync(mdDir)) return false;
     const assetDir = this.externalAssetDir();
-    if (assetDir && path.resolve(assetDir) !== path.resolve(mdDir) &&
-      !path.resolve(assetDir).startsWith(path.resolve(mdDir) + path.sep)) {
-      roots.push(assetDir);
-    }
     const onDisk = new Set();
-    for (const r of roots) {
-      if (!fs.existsSync(r)) continue;
-      for (const p of await this.walkExternalEntries(r)) onDisk.add(p);
+    // 与 scanExternalFiles 完全同口径：
+    //   MD  = listMarkdownFiles(mdDir, 递归, 深度 8)
+    //   其他 = assetDir 不限深度递归 + mdDir 不限深度递归（都跳过 MD）
+    try {
+      for (const p of await listMarkdownFiles(mdDir, true, 8)) onDisk.add(p);
+    } catch (e) { /* noop */ }
+    if (assetDir && fs.existsSync(assetDir)) {
+      for (const p of await this.walkNonMdFiles(assetDir)) onDisk.add(p);
+    }
+    if (fs.existsSync(mdDir) && path.resolve(mdDir) !== path.resolve(assetDir || '')) {
+      for (const p of await this.walkNonMdFiles(mdDir)) onDisk.add(p);
     }
     // 索引里已经存的是绝对路径，直接复用，省掉 40 万次 path.resolve
     let absSet = this._indexAbsSet;
@@ -2987,6 +3081,8 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
         }
         this._sortedCache = null;
         this._indexByAbs = null;
+        this._indexAbsSet = null;
+        this._linkSuggestCache = null;
         if (this._indexSaveTimer) { try { clearTimeout(this._indexSaveTimer); } catch (e) { /* noop */ } }
         this._indexSaveTimer = window.setTimeout(() => {
           this._indexSaveTimer = null;
@@ -3530,6 +3626,23 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     this.dbg('getLinkSuggestions 已并入库外笔记');
   }
 
+  /**
+   * 让 fileToLinktext 认识库外文件：别名条目选中时原生会调用它算链接正文，
+   * 不拦的话会把库外路径算成一串垃圾。
+   */
+  patchFileToLinktext() {
+    const mc = this.app.metadataCache;
+    if (!mc || typeof mc.fileToLinktext !== 'function' || mc.__evLinktextPatched) return;
+    const orig = mc.fileToLinktext.bind(mc);
+    mc.fileToLinktext = function patchedFileToLinktext(file, sourcePath, markdown) {
+      try {
+        if (file && file.__evExternal && file.__evLink) return file.__evLink;
+      } catch (e) { /* noop */ }
+      return orig(file, sourcePath, markdown);
+    };
+    mc.__evLinktextPatched = true;
+  }
+
   /** 给 [[ 补全用的库外条目：只要 path（不带扩展名），不要 file。
    *  结果按索引数组缓存：同一份索引只构建一次，避免每次打开 [[ 都重建几十万个对象。 */
   externalLinkSuggestEntries(limit) {
@@ -3547,6 +3660,29 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       rel = rel.replace(/\.(md|markdown)$/i, '');
       if (!rel) continue;
       out.push({ path: rel });
+      // 别名（同义词）也能被 [[ 搜到：选中后插入 [[别名]]，解析时按别名找回原文件
+      const aliases = Array.isArray(f.aliases) ? f.aliases : [];
+      if (!aliases.length) continue;
+      const baseName = path.basename(rel);
+      for (const a of aliases) {
+        if (out.length >= max) break;
+        const key = String(a || '').trim();
+        if (!key || key === rel || key === baseName) continue;
+        // 与库内一致：标题显示别名、副标题显示文件名，插入 [[文件名|别名]]
+        out.push({
+          file: {
+            path: rel + '.md',
+            name: baseName + '.md',
+            basename: baseName,
+            extension: 'md',
+            stat: { mtime: f.mtime || 0, ctime: f.ctime || 0, size: f.size || 0 },
+            __evExternal: true,
+            __evLink: rel,
+          },
+          path: rel,
+          alias: key,
+        });
+      }
     }
     this._linkSuggestCache = { src: idx.files, max, list: out };
     return out;
