@@ -2173,6 +2173,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     }
     this._sortedCache = null;
     this._indexByAbs = null;
+    this._linkSuggestCache = null;
     if (this._indexSaveTimer) { try { clearTimeout(this._indexSaveTimer); } catch (e) { /* noop */ } }
     this._indexSaveTimer = window.setTimeout(() => {
       this._indexSaveTimer = null;
@@ -2240,6 +2241,10 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
         if (cur) {
           byAbs.delete(abs);
           this.unindexRefLinks(abs, oldLinks);
+          // 同步从索引数组里删掉，否则删除的笔记会一直留到下次全量扫描
+          const at = idx.files.indexOf(cur);
+          if (at !== -1) idx.files.splice(at, 1);
+          this._indexAbsSet = null;
           touched = true;
         }
         continue;
@@ -2285,6 +2290,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       }
       if (!cur) { idx.files.push(entry); byAbs.set(abs, entry); }
       touched = true;
+      this._indexAbsSet = null;
     }
     if (!touched) return;
     this._sortedCache = null;
@@ -2445,6 +2451,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
   }
   /** 用文件列表填充文件名 / 别名缓存 */
   hydrateExternalCaches(files) {
+    this._linkSuggestCache = null;
     if (!this._externalNameCache) this._externalNameCache = new Map();
     if (!this._refIndex) this._refIndex = new Map();
     for (const f of files) {
@@ -2670,27 +2677,102 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
   async ensureIndexFresh(force) {
     const idx = this._indexCache && this._indexCache.data;
     if (!idx || !Array.isArray(idx.files)) return false;
-    // force：删除这类破坏性操作，宁可花一次 stat 也要拿准数据
-    if (!force && this._lastReconcile && Date.now() - this._lastReconcile < 60000) return true;
-    if (!force && !this._sessionReconciled) {
-      // 本次会话还没校准过，走下面的扫描
-    } else if (!force) {
-      const age = Date.now() - (idx.built || 0);
-      if (!this._indexStale && age <= 10 * 60 * 1000) return true;
+    const now = Date.now();
+    if (this._lastReconcile && now - this._lastReconcile < 60000) return true;
+    // 本次会话第一次、被标记过期、或索引超过 10 分钟：做一次全量 stat（准确）
+    const needFull = !this._sessionReconciled || this._indexStale || now - (idx.built || 0) > 10 * 60 * 1000;
+    if (!needFull) {
+      // 之后只做 readdir 差量：增/删用路径集合比对，改动交给 watcher
+      try {
+        await this.reconcileExternalDiff(idx);
+        this._lastReconcile = Date.now();
+        return true;
+      } catch (e) {
+        this.dbg('差量校准失败，退回全量', e.message);
+      }
+    }
+    if (!this._reconcilePromise) {
+      this._reconcilePromise = (async () => {
+        if (idx.files.length > 20000) new obsidian.Notice('正在校准外库索引…', 2500);
+        const fresh = await this.scanExternalFiles(idx.files);
+        await this.saveExternalIndex(fresh, idx.root);
+        this.hydrateExternalCaches(fresh);
+        this._indexStale = false;
+        this._sessionReconciled = true;
+        return true;
+      })().finally(() => { this._reconcilePromise = null; });
     }
     try {
-      if (idx.files.length > 20000) new obsidian.Notice('正在校准外库索引…', 2500);
-      const fresh = await this.scanExternalFiles(idx.files);
-      await this.saveExternalIndex(fresh, idx.root);
-      this.hydrateExternalCaches(fresh);
-      this._indexStale = false;
-      this._sessionReconciled = true;
+      const ok = await this._reconcilePromise;
       this._lastReconcile = Date.now();
-      return true;
+      return ok;
     } catch (e) {
       this.dbg('索引校准失败', e.message);
       return false;
     }
+  }
+
+  /** 递归列出目录下所有文件（只 readdir，不 stat） */
+  async walkExternalEntries(dir, maxDepth) {
+    const out = [];
+    const limit = typeof maxDepth === 'number' ? maxDepth : 8;
+    const walk = async (d, level) => {
+      if (level > limit) return;
+      let entries = [];
+      try { entries = await fs.promises.readdir(d, { withFileTypes: true }); }
+      catch (e) { return; }
+      for (const en of entries) {
+        if (en.name.startsWith('.')) continue;
+        const p = path.join(d, en.name);
+        if (en.isDirectory()) { await walk(p, level + 1); continue; }
+        if (en.isFile()) out.push(p);
+      }
+    };
+    await walk(dir, 0);
+    return out;
+  }
+
+  /** readdir 差量校准：新增的 stat 入库，消失的移除，其他不动（改动由 watcher 负责） */
+  async reconcileExternalDiff(idx) {
+    const mdDir = this.externalMdDir();
+    if (!mdDir) return false;
+    const roots = [mdDir];
+    const assetDir = this.externalAssetDir();
+    if (assetDir && path.resolve(assetDir) !== path.resolve(mdDir) &&
+      !path.resolve(assetDir).startsWith(path.resolve(mdDir) + path.sep)) {
+      roots.push(assetDir);
+    }
+    const onDisk = new Set();
+    for (const r of roots) {
+      if (!fs.existsSync(r)) continue;
+      for (const p of await this.walkExternalEntries(r)) onDisk.add(p);
+    }
+    // 索引里已经存的是绝对路径，直接复用，省掉 40 万次 path.resolve
+    let absSet = this._indexAbsSet;
+    if (!absSet || absSet.src !== idx.files) {
+      const set = new Set();
+      for (const f of idx.files) set.add(f.abs);
+      absSet = this._indexAbsSet = { src: idx.files, set };
+    }
+    const indexed = absSet.set;
+    const added = [];
+    for (const p of onDisk) if (!indexed.has(p)) added.push(p);
+    const removed = [];
+    for (const p of indexed) if (!onDisk.has(p)) removed.push(p);
+
+    const toRel = (p) => {
+      const rel = path.relative(mdDir, p);
+      if (!rel || rel.startsWith('..')) return null;   // 资产目录在 MD 目录之外：留给下次全量
+      return rel.split(path.sep).join('/');
+    };
+    const rels = [];
+    for (const p of added.concat(removed)) {
+      const rel = toRel(p);
+      if (rel) rels.push(rel);
+    }
+    if (rels.length) await this.applyExternalFsChanges(rels);
+    this.dbg('差量校准', added.length, '新增', removed.length, '移除');
+    return true;
   }
 
   /** 索引是否可用于「删除判断」：没加载、轻量模式、或刚有未处理变更时都不算可靠 */
@@ -3448,11 +3530,14 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     this.dbg('getLinkSuggestions 已并入库外笔记');
   }
 
-  /** 给 [[ 补全用的库外条目：只要 path（不带扩展名），不要 file */
+  /** 给 [[ 补全用的库外条目：只要 path（不带扩展名），不要 file。
+   *  结果按索引数组缓存：同一份索引只构建一次，避免每次打开 [[ 都重建几十万个对象。 */
   externalLinkSuggestEntries(limit) {
-    const max = typeof limit === 'number' ? limit : 50000;
     const idx = this._indexCache && this._indexCache.data;
     if (!idx || !Array.isArray(idx.files) || !idx.files.length) return [];
+    const max = typeof limit === 'number' ? limit : Infinity;
+    const cache = this._linkSuggestCache;
+    if (cache && cache.src === idx.files && cache.max >= max) return cache.list;
     const out = [];
     for (const f of idx.files) {
       if (out.length >= max) break;
@@ -3463,6 +3548,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       if (!rel) continue;
       out.push({ path: rel });
     }
+    this._linkSuggestCache = { src: idx.files, max, list: out };
     return out;
   }
 
@@ -6834,5 +6920,6 @@ class ExternalVaultView extends obsidian.ItemView {
 
 module.exports = ExternalFileImagePlugin;
 
+/* nosourcemap */
 /* nosourcemap */
 /* nosourcemap */
