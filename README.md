@@ -170,6 +170,7 @@ An Obsidian plugin for editing Markdown notes **outside your vault**: paste or d
 
 - 桌面版 Obsidian **1.14.0** 及以上。
 - 仅桌面端：库外文件与 Node.js 文件系统 API 都是桌面功能，移动端不支持。
+- 手机端就算手动装了插件，启动时也会直接退出（只弹一次提示），**不建目录、不建索引、不监听文件**，不会出现「正在建立库外文件索引…」。
 
 ## 模板变量
 

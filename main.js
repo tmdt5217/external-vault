@@ -1403,6 +1403,15 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     const raw = await this.loadData();
     this.settings = Object.assign({}, DEFAULT_SETTINGS, raw);
     UI_LANG = detectLang(this.settings);
+    // manifest 里已经写了 isDesktopOnly，但手机端仍可能加载手装的目录，
+    // 这里做个运行时兜底：手机上一律不注册任何东西。
+    this.isMobile = !!(obsidian.Platform && (obsidian.Platform.isMobile || obsidian.Platform.isMobileApp));
+    if (this.isMobile) {
+      this._mobileDisabled = true;
+      try { new obsidian.Notice('External Vault 只支持桌面端：它需要读写库外目录', 8000); } catch (e) { /* noop */ }
+      console.log(LOG, '手机端不支持，已跳过初始化');
+      return;
+    }
     this.migrateLegacyDirs(raw);
     this.ensureDirs();
 
@@ -1584,7 +1593,9 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     this.setupExternalLinkRendering();
     this.setupExternalTabBadge();
     // 预热外部文件名缓存，让裸 [[文件名]] 的 hover 预览能解析
-    window.setTimeout(() => { this.listExternalEntries().catch(() => {}); }, 1200);
+    if (!this.isMobile) {
+      window.setTimeout(() => { this.listExternalEntries().catch(() => {}); }, 1200);
+    }
 
     console.log(LOG, 'loaded v1.12.10', 'md=', this.mdRel(), 'assets=', this.assetRel(),
       'TExternalFile=', !!(obsidian.TExternalFile));
@@ -2060,6 +2071,8 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
   async listExternalEntries() {
     const mdDir = this.externalMdDir();
     if (!mdDir) return [];
+    // 目录不存在（手机端没同步外库时很常见）：直接返回，别建一份空索引
+    if (!fs.existsSync(mdDir)) return [];
     const idx = await this.loadExternalIndex();
     if (idx && idx.root === mdDir && Array.isArray(idx.files) && idx.files.length) {
       // 20 万条时 hydrate 一次就是几十万次 Map 写入，同一份索引只做一次
@@ -2089,11 +2102,15 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     await this.saveExternalIndex(files, mdDir);
     this.hydrateExternalCaches(files);
     if (notice) {
-      const secs = ((Date.now() - started) / 1000).toFixed(1);
-      if (typeof notice.setMessage === 'function') {
-        notice.setMessage('索引完成：' + files.length + ' 个文件（' + secs + ' 秒）');
+      if (!files.length) {
+        try { notice.hide(); } catch (e) { /* noop */ }
+      } else {
+        const secs = ((Date.now() - started) / 1000).toFixed(1);
+        if (typeof notice.setMessage === 'function') {
+          notice.setMessage('索引完成：' + files.length + ' 个文件（' + secs + ' 秒）');
+        }
+        window.setTimeout(() => { try { notice.hide(); } catch (e) { /* noop */ } }, 4000);
       }
-      window.setTimeout(() => { try { notice.hide(); } catch (e) { /* noop */ } }, 4000);
     }
     return files.sort((a, b) => b.mtime - a.mtime);
   }
@@ -2198,6 +2215,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
   }
   /** 监听当前外库目录：面板没开时也要保持索引新鲜 */
   startExternalWatcher() {
+    if (this.isMobile) return;
     try { if (this._extWatcher) { this._extWatcher.close(); this._extWatcher = null; } }
     catch (e) { /* noop */ }
     const dir = this.externalMdDir();
