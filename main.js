@@ -1590,6 +1590,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     this.patchFirstLinkpathDest();
     this.patchLinkSuggestions();
     this.patchFileToLinktext();
+    this.patchFileManagerForExternal();
     this.setupExternalLinkRendering();
     this.setupExternalTabBadge();
     // 预热外部文件名缓存，让裸 [[文件名]] 的 hover 预览能解析
@@ -3076,41 +3077,49 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       // 输入框只显示主名，用户没写扩展名时自动补回
       if (!path.extname(name) && ext) name += ext;
       if (name === path.basename(abs)) return;
-      const dest = path.join(path.dirname(abs), name);
-      if (fs.existsSync(dest)) throw new Error('同名文件已存在：' + name);
-      // 库内同名不算冲突（两个独立目录），但提示一下，避免以为是同一篇
-      let inVaultSameName = false;
-      try {
-        inVaultSameName = !!this.app.vault.getAbstractFileByPath(name);
-      } catch (e) { /* noop */ }
-      await fs.promises.rename(abs, dest);
-      if (inVaultSameName) {
-        new obsidian.Notice('库内已有同名笔记「' + name + '」，这是两个独立文件', 6000);
-      }
-      this._externalNameCache = null;
-      this._hydratedFor = null;
-      const idx = this._indexCache && this._indexCache.data;
-      if (idx && Array.isArray(idx.files)) {
-        for (const f of idx.files) {
-          if (path.resolve(f.abs) !== path.resolve(abs)) continue;
-          f.abs = dest;
-          f.rel = path.relative(this.externalMdDir(), dest).split(path.sep).join('/');
-          break;
-        }
-        this._sortedCache = null;
-        this._indexByAbs = null;
-        this._indexAbsSet = null;
-        this._linkSuggestCache = null;
-        if (this._indexSaveTimer) { try { clearTimeout(this._indexSaveTimer); } catch (e) { /* noop */ } }
-        this._indexSaveTimer = window.setTimeout(() => {
-          this._indexSaveTimer = null;
-          this.saveExternalIndex(idx.files, idx.root).catch(() => {});
-        }, 1500);
-      }
-      try { await this.rewriteLinksForRename(abs, dest); } catch (e) { this.dbg('重命名后改写链接失败', e.message); }
-      this.refreshExternalPanels();
-      new obsidian.Notice('已重命名为：' + name);
+      await this.performExternalRename(abs, path.join(path.dirname(abs), name));
     }, base).open();
+  }
+
+  /** 真正执行改名：文件、索引、链接、面板一起更新。原生「重命名」也走这里 */
+  async performExternalRename(abs, dest) {
+    if (!abs || !dest) return false;
+    if (path.resolve(abs) === path.resolve(dest)) return false;
+    const name = path.basename(dest);
+    if (fs.existsSync(dest)) throw new Error('同名文件已存在：' + name);
+    // 库内同名不算冲突（两个独立目录），但提示一下，避免以为是同一篇
+    let inVaultSameName = false;
+    try {
+      inVaultSameName = !!this.app.vault.getAbstractFileByPath(name);
+    } catch (e) { /* noop */ }
+    await fs.promises.rename(abs, dest);
+    if (inVaultSameName) {
+      new obsidian.Notice('库内已有同名笔记「' + name + '」，这是两个独立文件', 6000);
+    }
+    this._externalNameCache = null;
+    this._hydratedFor = null;
+    const idx = this._indexCache && this._indexCache.data;
+    if (idx && Array.isArray(idx.files)) {
+      for (const f of idx.files) {
+        if (path.resolve(f.abs) !== path.resolve(abs)) continue;
+        f.abs = dest;
+        f.rel = path.relative(this.externalMdDir(), dest).split(path.sep).join('/');
+        break;
+      }
+      this._sortedCache = null;
+      this._indexByAbs = null;
+      this._indexAbsSet = null;
+      this._linkSuggestCache = null;
+      if (this._indexSaveTimer) { try { clearTimeout(this._indexSaveTimer); } catch (e) { /* noop */ } }
+      this._indexSaveTimer = window.setTimeout(() => {
+        this._indexSaveTimer = null;
+        this.saveExternalIndex(idx.files, idx.root).catch(() => {});
+      }, 1500);
+    }
+    try { await this.rewriteLinksForRename(abs, dest); } catch (e) { this.dbg('重命名后改写链接失败', e.message); }
+    this.refreshExternalPanels();
+    new obsidian.Notice('已重命名为：' + name);
+    return true;
   }
 
   /** 把引用旧文件名的链接改成新文件名 */
@@ -3648,6 +3657,71 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
    * 让 fileToLinktext 认识库外文件：别名条目选中时原生会调用它算链接正文，
    * 不拦的话会把库外路径算成一串垃圾。
    */
+  /**
+   * 原生菜单里的「重命名」「删除文件」对外库笔记走的是 vault 的库内路径逻辑
+   * （file:/... 拼真实路径 → 改名失败；删除只动 md 不动附件）。
+   * 这里把这两个入口接管掉：外库文件转走插件自己的重命名和删除流程。
+   */
+  patchFileManagerForExternal() {
+    const fm = this.app && this.app.fileManager;
+    if (!fm || fm.__evFileManagerPatched) return;
+
+    if (typeof fm.promptForDeletion === 'function') {
+      const origDel = fm.promptForDeletion.bind(fm);
+      fm.promptForDeletion = (target, ...rest) => {
+        try {
+          const list = Array.isArray(target) ? target : [target];
+          const externals = list.filter((f) => f && isExternalTFile(f));
+          if (externals.length) {
+            const natives = list.filter((f) => !(f && isExternalTFile(f)));
+            if (externals.length === 1 && natives.length === 0) {
+              this.guard(() => this.promptDeleteExternalNote(externals[0]));
+              return Promise.resolve(true);
+            }
+            for (const f of externals) this.guard(() => this.promptDeleteExternalNote(f));
+            if (!natives.length) return Promise.resolve(true);
+            return origDel(natives, ...rest);
+          }
+        } catch (e) {
+          this.dbg('外库删除接管失败，交回原生', e.message);
+        }
+        return origDel(target, ...rest);
+      };
+    }
+
+    if (typeof fm.renameFile === 'function') {
+      const origRename = fm.renameFile.bind(fm);
+      fm.renameFile = (file, newPath, ...rest) => {
+        try {
+          if (file && isExternalTFile(file)) {
+            const abs = externalAbsFromFile(file, this.app);
+            const dest = abs ? this.externalRenameTarget(abs, newPath) : null;
+            if (abs && dest) {
+              this.guard(() => this.performExternalRename(abs, dest));
+              return Promise.resolve();
+            }
+          }
+        } catch (e) {
+          this.dbg('外库重命名接管失败，交回原生', e.message);
+        }
+        return origRename(file, newPath, ...rest);
+      };
+    }
+
+    fm.__evFileManagerPatched = true;
+    this.dbg('已接管原生的删除 / 重命名');
+  }
+
+  /** 原生传来的新路径 → 外库文件的目标绝对路径（只改名，不换目录） */
+  externalRenameTarget(abs, newPath) {
+    const raw = String(newPath || '');
+    if (!raw) return null;
+    let name = raw.split(/[\\/]/).pop() || '';
+    if (!name) return null;
+    if (!path.extname(name)) name += path.extname(abs);
+    return path.join(path.dirname(abs), name);
+  }
+
   patchFileToLinktext() {
     const mc = this.app.metadataCache;
     if (!mc || typeof mc.fileToLinktext !== 'function' || mc.__evLinktextPatched) return;
@@ -4629,6 +4703,64 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
    * 同一个 Menu 对象用 WeakSet 去重；若两个事件都触发，后到的多选数组
    * 通过 __evUpdateMoveOut 把已添加条目的目标升级为数量更多的一组。
    */
+  /**
+   * 摘掉标签页右键里原生的「删除文件」。
+   * 它由 Markdown 视图的 onPaneMenu 添加（section=danger、dom 带 is-warning），
+   * 点下去走 fileManager.promptForDeletion，对外库笔记只会删 md、不动附件，
+   * 与外库自己的「删除库外 MD（含附件）」重复。返回摘掉的条数。
+   */
+  dropNativeDeleteItems(menu) {
+    try {
+      if (!menu || !Array.isArray(menu.items)) return 0;
+      let removed = 0;
+      for (let i = menu.items.length - 1; i >= 0; i -= 1) {
+        const it = menu.items[i];
+        if (!it || it.section !== 'danger') continue;
+        const dom = it.dom;
+        const warn = dom && dom.classList && typeof dom.classList.contains === 'function' &&
+          dom.classList.contains('is-warning');
+        if (!warn) continue;
+        menu.items.splice(i, 1);
+        removed += 1;
+      }
+      if (removed) this.dbg('已移除原生「删除文件」菜单项', removed);
+      return removed;
+    } catch (e) { return 0; }
+  }
+
+  /**
+   * 外库笔记的标签页里，下面这些原生项没有对应实现（点下去要么失败、要么什么都不发生）：
+   *   - 打开版本历史：文件恢复只索引库内文件
+   *   - 在文件列表中显示当前文件：库内文件树里没有这个文件
+   * 按标题（中英）+ 图标匹配摘掉，返回摘掉的条数。
+   */
+  dropUselessNativeItems(menu) {
+    try {
+      if (!menu || !Array.isArray(menu.items)) return 0;
+      const useless = /(打开版本历史|查看版本历史|Open version history|View version history|在文件列表中显示|Show in file explorer|Reveal in file explorer)/i;
+      const iconOf = (it) => {
+        try {
+          const svg = it && it.iconEl && it.iconEl.querySelector && it.iconEl.querySelector('svg');
+          const cls = svg && svg.classList ? Array.from(svg.classList) : [];
+          return cls.filter((c) => c.startsWith('lucide-')).join(' ');
+        } catch (e) { return ''; }
+      };
+      let removed = 0;
+      for (let i = menu.items.length - 1; i >= 0; i -= 1) {
+        const it = menu.items[i];
+        if (!it) continue;
+        const title = (it.titleEl && it.titleEl.textContent) || '';
+        const icon = iconOf(it);
+        const hit = useless.test(title) || (it.section === 'view' && icon.indexOf('lucide-history') !== -1);
+        if (!hit) continue;
+        menu.items.splice(i, 1);
+        removed += 1;
+      }
+      if (removed) this.dbg('已移除外库笔记上无意义的原生菜单项', removed);
+      return removed;
+    } catch (e) { return 0; }
+  }
+
   registerContextMenus() {
     const outMenus = new WeakSet();
     const inMenus = new WeakSet();
@@ -4697,6 +4829,10 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     };
     const addDelete = (menu, file) => {
       if (!canAdd(menu, delMenus)) return;
+      // 外库笔记：先摘掉原生那条「删除文件」，避免两个删除入口；
+      // 再摘掉版本历史 / 在文件列表中显示这两个对本类文件无意义的项
+      this.dropNativeDeleteItems(menu);
+      this.dropUselessNativeItems(menu);
       try {
         menu.addItem((item) => item
           .setSection('action')
@@ -7074,6 +7210,7 @@ class ExternalVaultView extends obsidian.ItemView {
 
 module.exports = ExternalFileImagePlugin;
 
+/* nosourcemap */
 /* nosourcemap */
 /* nosourcemap */
 /* nosourcemap */
