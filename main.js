@@ -1933,16 +1933,20 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     await fs.promises.writeFile(dest, content, 'utf8');
     this.dbg('created →', dest);
 
-    // 把完整路径放进剪贴板，打开失败时可直接粘到文件选择器
-    try { await navigator.clipboard.writeText(dest); } catch (e) { /* noop */ }
     // 1.14+ 可直接在 Obsidian 内打开库外 MD；老版本退回系统「打开方式」
+    // 注意：不要在这里无条件写剪贴板——会覆盖用户原来的剪贴板内容。
+    // 只有两种打开方式都失败时，才复制路径当兜底。
     let opened = false;
     try { await this.openExternalMd(dest); opened = true; }
     catch (e) { this.dbg('新建后直接打开失败，降级系统打开', e.message); }
-    if (!opened) await this.systemOpen(dest);
+    if (!opened) opened = await this.systemOpen(dest);
+    if (!opened) {
+      try { await navigator.clipboard.writeText(dest); } catch (e) { /* noop */ }
+    }
 
     new obsidian.Notice(
-      '已创建 ' + title + '.md\n位置：' + dir + '\n路径已复制；若未自动打开，请用「打开仓库外的文件…」选择它',
+      '已创建 ' + title + '.md\n位置：' + dir +
+        (opened ? '' : '\n路径已复制；请用「打开仓库外的文件…」选择它'),
       9000
     );
     return dest;
@@ -1954,11 +1958,12 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       const shell = electron && (electron.shell || (electron.remote && electron.remote.shell));
       if (shell && typeof shell.openPath === 'function') {
         const err = await shell.openPath(filePath);
-        if (err) this.dbg('系统打开失败', err);
-        return;
+        if (err) { this.dbg('系统打开失败', err); return false; }
+        return true;
       }
       this.dbg('当前环境没有 shell.openPath，无法用系统方式打开', filePath);
     } catch (err) { this.dbg('系统打开异常', err); }
+    return false;
   }
 
   // ---- Ribbon：打开 External Vault ----------------------------------------
@@ -4612,13 +4617,9 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     }
 
     // 移入后不主动打开目标笔记：保留当前正在看的笔记，避免当前标签被替换
+    // 注意：这里不写剪贴板。搬运完自动复制路径会覆盖用户原有剪贴板，
+    // 需要时用「复制路径」命令或右键菜单自己复制。
     const opened = openedInPlace;
-    if (direction !== 'in') {
-      // 多选移出时复制目标目录（比只复制第一篇笔记的路径更有用）
-      try {
-        await navigator.clipboard.writeText(plans.length > 1 ? mdDestDir : plans[0].dest);
-      } catch (e) { /* noop */ }
-    }
 
     let moveLine;
     if (!doMove) moveLine = '\n源文件已保留（只复制）';
