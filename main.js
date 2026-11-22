@@ -280,6 +280,9 @@ const EN = {
   '在新标签页中打开': 'Open in new tab',
   '替换当前标签页': 'Replace current tab',
   '在此处插入链接': 'Insert link here',
+  'Cmd+O 同时搜索库外笔记': 'Search external notes in Quick switcher',
+  '开启后，快速切换（Cmd/Ctrl+O）里会同时列出库内与库外 Markdown；关闭则用 Obsidian 原生切换器':
+    'Include external Markdown in Quick switcher (Cmd/Ctrl+O)',
   '删除库外 MD（含附件）': 'Delete external note (with attachments)',
   ' 篇': ' notes',
   ' 篇 MD': ' MD notes',
@@ -324,6 +327,7 @@ const DEFAULT_SETTINGS = {
   ribbonClickAction: 'menu',            // menu | reveal | latest
   ribbonMaxNotes: 20,                   // 菜单里最多列几篇最近编辑的库外 MD
   linkStyle: 'angle',                   // angle | encode | plain
+  switcherCombined: true,               // Cmd+O 快速切换里同时搜索库外笔记
   keepOriginalName: true,               // 拖入文件时保留原名；粘贴截图仍用时间戳命名
   writeTitle: true,                     // 「不用模板」时写入「# 标题」（模板模式不追加）
   // ---- 新建 MD 模板（v1.4.6） ----
@@ -1591,6 +1595,8 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     this.patchLinkSuggestions();
     this.patchFileToLinktext();
     this.patchFileManagerForExternal();
+    this.patchSwitcherCommand();
+    this.register(() => this.restoreSwitcherCommand());
     this.setupExternalLinkRendering();
     this.setupExternalTabBadge();
     // 预热外部文件名缓存，让裸 [[文件名]] 的 hover 预览能解析
@@ -3715,6 +3721,124 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
 
     fm.__evFileManagerPatched = true;
     this.dbg('已接管原生的删除 / 重命名');
+  }
+
+  /**
+   * Cmd+O（switcher:open）只列 vault.getFiles()，库外笔记天然搜不到。
+   * 这里把命令的 callback 换成「库内 + 库外」合并版；设置里可以关掉回退原生。
+   */
+  patchSwitcherCommand() {
+    try {
+      const cmds = this.app && this.app.commands;
+      const cmd = cmds && cmds.commands && cmds.commands['switcher:open'];
+      if (!cmd || cmd.__evSwitcherPatched) return;
+      const orig = cmd.callback;
+      this._origSwitcherCallback = orig;
+      cmd.callback = () => {
+        try {
+          if (this.settings.switcherCombined === false) { orig.call(cmd); return; }
+          const items = this.switcherItems();
+          // 没有库外笔记（或索引还没建好）时，保留原生切换器，别丢它的新建笔记等功能
+          if (!items.some((it) => it.kind === 'external')) { orig.call(cmd); return; }
+          new CombinedSwitcherModal(this.app, this, items).open();
+        } catch (e) {
+          this.dbg('合并版快速切换失败，回退原生', e.message);
+          try { orig.call(cmd); } catch (e2) { /* noop */ }
+        }
+      };
+      cmd.__evSwitcherPatched = true;
+      this.dbg('已接管 Cmd+O 快速切换');
+    } catch (e) {
+      this.dbg('接管 Cmd+O 失败', e.message);
+    }
+  }
+
+  restoreSwitcherCommand() {
+    try {
+      const cmds = this.app && this.app.commands;
+      const cmd = cmds && cmds.commands && cmds.commands['switcher:open'];
+      if (cmd && cmd.__evSwitcherPatched && this._origSwitcherCallback) {
+        cmd.callback = this._origSwitcherCallback;
+        delete cmd.__evSwitcherPatched;
+      }
+    } catch (e) { /* noop */ }
+    this._origSwitcherCallback = null;
+  }
+
+  /** 快速切换的候选：库内 Markdown + 库外 Markdown（来自索引） */
+  switcherItems() {
+    const out = [];
+    try {
+      const files = this.app.vault.getMarkdownFiles();
+      for (const f of files) {
+        out.push({
+          kind: 'vault',
+          file: f,
+          name: f.basename,
+          path: f.path,
+          lower: (f.basename + ' ' + f.path).toLowerCase(),
+          mtime: (f.stat && f.stat.mtime) || 0,
+        });
+      }
+    } catch (e) { /* noop */ }
+    const idx = this._indexCache && this._indexCache.data;
+    if (idx && Array.isArray(idx.files)) {
+      for (const f of idx.files) {
+        if (!f || f.kind !== 'md') continue;
+        const name = path.basename(f.abs, path.extname(f.abs));
+        const rel = String(f.rel || name);
+        out.push({
+          kind: 'external',
+          abs: f.abs,
+          name,
+          path: rel,
+          lower: (name + ' ' + rel).toLowerCase(),
+          mtime: f.mtime || 0,
+        });
+      }
+    }
+    return out;
+  }
+
+  /** 空查询 → 最近修改；有查询 → 子串匹配，按命中位置与时间排序 */
+  filterSwitcherItems(items, query, limit) {
+    const cap = typeof limit === 'number' ? limit : 40;
+    const q = String(query || '').trim().toLowerCase();
+    const list = Array.isArray(items) ? items : [];
+    if (!q) {
+      // 只挑前 cap 个最近的，避免对 20 万条整体排序
+      const top = [];
+      for (const it of list) {
+        if (top.length >= cap && it.mtime <= top[top.length - 1].mtime) continue;
+        let at = top.length;
+        while (at > 0 && top[at - 1].mtime < it.mtime) at -= 1;
+        top.splice(at, 0, it);
+        if (top.length > cap) top.pop();
+      }
+      return top;
+    }
+    const hits = [];
+    for (const it of list) {
+      const pos = it.lower.indexOf(q);
+      if (pos === -1) continue;
+      hits.push({ it, pos });
+      if (hits.length >= cap * 10) break;
+    }
+    hits.sort((a, b) => a.pos - b.pos || (b.it.mtime - a.it.mtime));
+    return hits.slice(0, cap).map((h) => h.it);
+  }
+
+  openSwitcherItem(item) {
+    if (!item) return;
+    if (item.kind === 'external') {
+      this.guard(() => this.openExternalMd(item.abs));
+      return;
+    }
+    if (!item.file) return;
+    this.guard(async () => {
+      const leaf = this.app.workspace.getLeaf(false);
+      if (leaf && typeof leaf.openFile === 'function') await leaf.openFile(item.file);
+    });
   }
 
   /** 原生传来的新路径 → 外库文件的目标绝对路径（只改名，不换目录） */
@@ -6300,6 +6424,12 @@ class ExternalFileImageSettingTab extends obsidian.PluginSettingTab {
         .onChange((v) => save('showNotice', v)));
 
     new obsidian.Setting(el)
+      .setName(tr('Cmd+O 同时搜索库外笔记'))
+      .setDesc(tr('开启后，快速切换（Cmd/Ctrl+O）里会同时列出库内与库外 Markdown；关闭则用 Obsidian 原生切换器'))
+      .addToggle((t) => t.setValue(this.plugin.settings.switcherCombined !== false)
+        .onChange((v) => save('switcherCombined', v)));
+
+    new obsidian.Setting(el)
       .setName(tr('调试日志'))
       .setDesc(tr('在开发者控制台打印路径探测、保存位置等信息'))
       .addToggle((t) => t.setValue(this.plugin.settings.debug)
@@ -6319,6 +6449,35 @@ class ExternalFileImageSettingTab extends obsidian.PluginSettingTab {
 }
 
 /** 简单的单行文本输入弹窗（新建文件夹用） */
+class CombinedSwitcherModal extends obsidian.FuzzySuggestModal {
+  constructor(app, plugin, items) {
+    super(app);
+    this.plugin = plugin;
+    this.items = items || [];
+    this.limit = 40;
+    this.emptyStateText = '没有匹配的笔记';
+    try { this.setPlaceholder('搜索库内 / 库外笔记…'); } catch (e) { /* noop */ }
+  }
+  getSuggestions(query) {
+    try { return this.plugin.filterSwitcherItems(this.items, query, this.limit); }
+    catch (e) { return []; }
+  }
+  renderSuggestion(item, el) {
+    try {
+      el.addClass('ev-switcher-item');
+      const title = el.createDiv({ cls: 'ev-switcher-title', text: item.name });
+      el.createDiv({ cls: 'ev-switcher-path', text: item.path });
+      if (item.kind === 'external') {
+        el.addClass('is-external');
+        title.createSpan({ cls: 'ev-switcher-tag', text: '外库' });
+      }
+    } catch (e) { /* noop */ }
+  }
+  onChooseItem(item) {
+    this.plugin.openSwitcherItem(item);
+  }
+}
+
 class TextPromptModal extends obsidian.Modal {
   constructor(app, title, placeholder, onSubmit, initial) {
     super(app);

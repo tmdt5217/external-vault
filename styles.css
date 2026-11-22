@@ -444,3 +444,25 @@ body .ev-panel .nav-file-title.is-active::after {
 @keyframes ev-caret-blink {
   50% { opacity: 0; }
 }
+
+/* Cmd+O 合并版快速切换：标题 + 路径，外库项带标记 */
+.ev-switcher-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ev-switcher-title {
+  font-size: var(--font-ui-medium);
+}
+.ev-switcher-path {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+}
+.ev-switcher-tag {
+  margin-left: 6px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 10px;
+  background: var(--background-modifier-hover);
+  color: var(--text-muted);
+}
