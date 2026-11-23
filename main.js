@@ -3521,6 +3521,10 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       const orig = ws.openLinkText.bind(ws);
       this._origOpenLinkText = orig;
       ws.openLinkText = (linktext, sourcePath, newLeaf, openViewState) => {
+        try {
+          const vaultTarget = this.app.metadataCache.getFirstLinkpathDest(String(linktext || '').split('#')[0], sourcePath || '');
+          if (vaultTarget && vaultTarget.path) return orig(linktext, sourcePath, newLeaf, openViewState);
+        } catch (e) { /* noop */ }
         const abs = this.externalTargetForLink(linktext, sourcePath);
         if (abs) return this.openExternalMd(abs);
         return orig(linktext, sourcePath, newLeaf, openViewState);
@@ -6459,11 +6463,18 @@ class CombinedSwitcherModal extends obsidian.FuzzySuggestModal {
     try { this.setPlaceholder('搜索库内 / 库外笔记…'); } catch (e) { /* noop */ }
   }
   getSuggestions(query) {
-    try { return this.plugin.filterSwitcherItems(this.items, query, this.limit); }
-    catch (e) { return []; }
-  }
-  renderSuggestion(item, el) {
     try {
+      // FuzzySuggestModal 的约定是 [{ match, item }]：基类在回车 / 点击时
+      // 会执行 onChooseItem(t.item)。直接返回原始对象会让 t.item 为 undefined，
+      // 表现为「能搜到、但按回车或点击没反应」。
+      const list = this.plugin.filterSwitcherItems(this.items, query, this.limit);
+      return list.map((item) => ({ match: null, item }));
+    } catch (e) { return []; }
+  }
+  renderSuggestion(match, el) {
+    try {
+      const item = match && match.item ? match.item : match;
+      if (!item) return;
       el.addClass('ev-switcher-item');
       const title = el.createDiv({ cls: 'ev-switcher-title', text: item.name });
       el.createDiv({ cls: 'ev-switcher-path', text: item.path });
