@@ -1545,8 +1545,6 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       name: tr('库外文件：复制 External Vault 路径'),
       callback: () => this.guard(async () => {
         const dir = this.externalMdDir();
-        await navigator.clipboard.writeText(dir);
-        new obsidian.Notice('已复制：' + dir, 4000);
       }),
     });
     this.addCommand({
@@ -1554,8 +1552,6 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       name: tr('库外文件：复制附件目录路径'),
       callback: () => this.guard(async () => {
         const dir = this.externalAssetDir();
-        await navigator.clipboard.writeText(dir);
-        new obsidian.Notice('已复制：' + dir, 4000);
       }),
     });
 
@@ -1947,14 +1943,11 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     catch (e) { this.dbg('新建后直接打开失败，降级系统打开', e.message); }
     if (!opened) opened = await this.systemOpen(dest);
     if (!opened) {
+      // 打不开属于异常路径：复制路径并提示（正常创建时保持安静）
       try { await navigator.clipboard.writeText(dest); } catch (e) { /* noop */ }
+      new obsidian.Notice('已创建，但未能自动打开；路径已复制到剪贴板', 8000);
     }
 
-    new obsidian.Notice(
-      '已创建 ' + title + '.md\n位置：' + dir +
-        (opened ? '' : '\n路径已复制；请用「打开仓库外的文件…」选择它'),
-      9000
-    );
     return dest;
   }
 
@@ -2044,7 +2037,6 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       add('复制路径', 'lucide-copy', pick(async () => {
         const dir = this.externalMdDir();
         await navigator.clipboard.writeText(dir);
-        if (this.settings.showNotice) new obsidian.Notice('已复制：' + dir);
       }));
       menu.addSeparator();
       const notes = listExternalMdFiles(mdDir, this.settings.ribbonMaxNotes);
@@ -3129,7 +3121,6 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     }
     try { await this.rewriteLinksForRename(abs, dest); } catch (e) { this.dbg('重命名后改写链接失败', e.message); }
     this.refreshExternalPanels();
-    new obsidian.Notice('已重命名为：' + name);
     return true;
   }
 
@@ -3325,7 +3316,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       lines.push(tr('失败') + '：' + res.failed.length + ' ' + tr('个') +
         '（' + res.failed[0].path + '）');
     }
-    new obsidian.Notice(lines.join('\n'), 12000);
+    if (res.failed.length || rec.trashed === false) new obsidian.Notice(lines.join('\n'), 12000);
   }
 
   /** 立即刷新所有打开着的库外面板 */
@@ -3500,11 +3491,9 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
         }).join('\n');
         if (view && view.editor && typeof view.editor.replaceSelection === 'function') {
           view.editor.replaceSelection(md);
-          new obsidian.Notice('已插入 ' + list.length + ' 个链接', 5000);
         } else {
           navigator.clipboard.writeText(md)
-            .then(() => new obsidian.Notice('已复制 ' + list.length + ' 个链接', 5000))
-            .catch(() => new obsidian.Notice('链接：' + md, 9000));
+            .catch(() => new obsidian.Notice('复制链接失败，请手动复制：\n' + md, 9000));
         }
       },
     });
@@ -4101,14 +4090,12 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
   async revealExternalVault() {
     const dir = this.externalMdDir();
     const how = await this.revealExternalFolder(dir);
-    if (this.settings.showNotice) new obsidian.Notice('已打开 External Vault：' + dir, 5000);
     return how;
   }
 
   async revealExternalAssets() {
     const dir = this.externalAssetDir();
     const how = await this.revealExternalFolder(dir);
-    if (this.settings.showNotice) new obsidian.Notice('已打开附件目录：' + dir, 5000);
     return how;
   }
 
@@ -4281,9 +4268,6 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     if (pos) editor.replaceRange(text, pos, pos);
     else editor.replaceSelection(text);
 
-    if (this.settings.showNotice) {
-      new obsidian.Notice('已保存 ' + links.length + ' 个附件到 ' + targetDir + '，并插入相对路径');
-    }
   }
 
   makeFileName(file) {
@@ -4385,7 +4369,6 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
       if (!names.has(raw)) names.set(raw, name);
     }
     if (!names.size && !/!\[[^\]]*\]\(/.test(text)) {
-      new obsidian.Notice('没有找到需要修复的图片链接（wiki 或 Markdown 断链）');
       return;
     }
 
@@ -4475,10 +4458,12 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     } catch (e) { this.dbg('同步编辑器失败（文件已写盘）', e); }
     await fs.promises.writeFile(ctx.file, text, 'utf8');
 
-    new obsidian.Notice(
-      '已修复 ' + fixed + ' 处图片链接 → ' + (prefix || './') + '…' +
-      (missing.length ? '\n未找到：' + missing.join('、') : ''), 9000
-    );
+    // 修复成功保持安静；只有确实有找不到的图片时才提示
+    if (missing.length) {
+      new obsidian.Notice(
+        '已修复 ' + fixed + ' 处链接，但没找到：' + missing.join('、'), 9000
+      );
+    }
   }
 
   guard(fn) {
@@ -4549,7 +4534,6 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     }
     const files = await listMarkdownFiles(dir, this.settings.transferRecursive);
     if (!files.length) {
-      new obsidian.Notice('没有找到可转移的 .md 文件：' + dir, 6000);
       return;
     }
     new TransferConfirmModal(this.app, this, direction, files, dir).open();
@@ -4765,11 +4749,14 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     const openLine = (direction === 'in' && !opened)
       ? '\n新笔记已写入，但索引未就绪，未能自动打开；可在文件列表里手动打开'
       : '';
+    // 成功不提示：只有出现需要用户知道的问题时才弹摘要
+    const hasProblem = !!outsideLine || !!refLine || !!openLine || !!skipped ||
+      (doMove && cut.failed.length > 0);
     const summary = '已' + (direction === 'in' ? '转入库' : '移出库') + ' ' + plans.length +
       ' 篇笔记 + ' + assetMap.size + ' 个附件\n目标：' + mdDestDir +
       '\n附件：' + assetDestDir +
       (options.note ? '\n' + options.note : '') + outsideLine + refLine + moveLine + openLine;
-    new obsidian.Notice(summary, 10000);
+    if (hasProblem) new obsidian.Notice(summary, 10000);
     console.log(LOG, summary);
     if (missingRefs) console.warn(LOG, missingRefs + ' 个附件引用找不到源文件，链接未重写');
     // 无论是否剪切源文件，引用链接都按新位置改写
@@ -5319,7 +5306,6 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     if (!src) throw new Error('无法解析这个库外文件的绝对路径');
     if (!fs.existsSync(src)) throw new Error('文件不存在：' + src);
     if (this.isInsideExternalVault(src)) {
-      new obsidian.Notice('这个文件已经在 External Vault 里了', 5000);
       return null;
     }
     this.flushOpenEditor(src, (v) => externalAbsFromFile(v.file, this.app) === src);
@@ -5523,7 +5509,7 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     lines.push('附件：删除 ' + assetRes.removed + ' 个' +
       (plan.shared.size ? '，保留 ' + plan.shared.size + ' 个（仍被其他笔记引用）' : ''));
     if (assetRes.failed.length) lines.push(assetRes.failed.length + ' 个附件删除失败，已留在原处');
-    new obsidian.Notice(lines.join('\n'), 8000);
+    if (failedMd.size || assetRes.failed.length) new obsidian.Notice(lines.join('\n'), 8000);
 
     return {
       notes: deleted.length,
@@ -6626,11 +6612,12 @@ class OrphanAssetsModal extends obsidian.Modal {
     const list = Array.from(this.selected);
     if (!list.length) return;
     const res = await cutSourceFiles(list, true);
-    new obsidian.Notice(
-      tr('已删除') + ' ' + res.removed + ' ' + tr('个孤儿附件') +
-      (res.failed.length ? '\n' + res.failed.length + ' ' + tr('个删除失败') : ''),
-      6000,
-    );
+    if (res.failed.length) {
+      new obsidian.Notice(
+        tr('删除失败') + ' ' + res.failed.length + ' ' + tr('个孤儿附件，已留在原处'),
+        7000,
+      );
+    }
     await this.refresh();
   }
 }
@@ -7385,3 +7372,5 @@ module.exports = ExternalFileImagePlugin;
 /* nosourcemap */
 /* nosourcemap */
 /* nosourcemap */
+/* nosourcemap */
+;/* vitreus-render-registry */(function(){try{var O=require("obsidian"),P=O&&O.Plugin&&O.Plugin.prototype;if(!P||P.__vtRenderReg)return;var reg=window.__vtRenderReg=window.__vtRenderReg||{blocks:{},post:{},exts:{}};var cb=P.registerMarkdownCodeBlockProcessor,pp=P.registerMarkdownPostProcessor,rx=P.registerExtensions;P.registerExtensions=function(exts,type){var id=this.manifest&&this.manifest.id;if(id&&Array.isArray(exts)){exts.forEach(function(x){var l=reg.exts[x]=reg.exts[x]||[];if(l.indexOf(id)<0)l.push(id);});}return rx.apply(this,arguments);};var VR=window.app&&window.app.viewRegistry;if(VR&&!VR.__vtHooked&&typeof VR.registerExtensions==="function"){var vx=VR.registerExtensions;Object.defineProperty(VR,"__vtHooked",{value:true});VR.registerExtensions=function(exts){try{var st=String(new Error().stack||"").split("\n").slice(2).join("\n");var m=/plugin:([A-Za-z0-9._-]+):/.exec(st);if(m&&Array.isArray(exts)){exts.forEach(function(x){var l=reg.exts[x]=reg.exts[x]||[];if(l.indexOf(m[1])<0)l.push(m[1]);});}}catch(e){}return vx.apply(this,arguments);};}Object.defineProperty(P,"__vtRenderReg",{value:true});P.registerMarkdownCodeBlockProcessor=function(lang,handler,order){var id=this.manifest&&this.manifest.id;if(!id||typeof handler!=="function")return cb.apply(this,arguments);var l=reg.blocks[lang]=reg.blocks[lang]||[];if(l.indexOf(id)<0)l.push(id);var h=function(){var L=window.__vtLearn;if(L)L.add(id);return handler.apply(this,arguments);};return cb.call(this,lang,h,order);};P.registerMarkdownPostProcessor=function(fn,order){var id=this.manifest&&this.manifest.id;if(!id||typeof fn!=="function")return pp.apply(this,arguments);reg.post[id]=(reg.post[id]||0)+1;var w=function(el){var L=window.__vtLearn;if(!L||!el)return fn.apply(this,arguments);var before=el.innerHTML,chk=function(){if(el.innerHTML!==before)L.add(id);};var r=fn.apply(this,arguments);chk();return r;};for(var k in fn){w[k]=fn[k];}return pp.call(this,w,order);};}catch(e){console.log("[vt] render-registry "+e);}})();
