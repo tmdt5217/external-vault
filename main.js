@@ -278,6 +278,8 @@ const EN = {
   '移入 Vault（含附件）': 'Move into vault (with attachments)',
   '移入 External Vault（含附件）': 'Move into External Vault (with attachments)',
   '在新标签页中打开': 'Open in new tab',
+  '在新标签组中打开': 'Open in new tab group',
+  '创建': 'Create',
   '替换当前标签页': 'Replace current tab',
   '在此处插入链接': 'Insert link here',
   'Cmd+O 同时搜索库外笔记': 'Search external notes in Quick switcher',
@@ -3758,20 +3760,52 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     this._origSwitcherCallback = null;
   }
 
-  /** 快速切换的候选：库内 Markdown + 库外 Markdown（来自索引） */
+  /** 取库内笔记的 aliases（frontmatter 的 aliases / alias，兼容字符串与数组） */
+  fileAliases(file) {
+    try {
+      const cache = this.app.metadataCache.getFileCache(file);
+      const fm = cache && cache.frontmatter;
+      if (!fm) return [];
+      const raw = fm.aliases != null ? fm.aliases : fm.alias;
+      if (raw == null) return [];
+      const list = Array.isArray(raw) ? raw : [raw];
+      return list.map((x) => String(x == null ? '' : x).trim()).filter(Boolean);
+    } catch (e) { return []; }
+  }
+
+  /** 快速切换的候选：库内 + 库外，各自带上别名行（与原生一致） */
   switcherItems() {
     const out = [];
+    const pushAliasRows = (base, aliases) => {
+      for (const a of aliases) {
+        if (!a || a === base.name) continue;
+        out.push({
+          kind: base.kind,
+          file: base.file,
+          abs: base.abs,
+          name: a,
+          path: base.path,
+          isAlias: true,
+          lower: (a + ' ' + base.path).toLowerCase(),
+          mtime: base.mtime,
+        });
+      }
+    };
     try {
       const files = this.app.vault.getMarkdownFiles();
       for (const f of files) {
-        out.push({
+        const aliases = this.fileAliases(f);
+        const mtime = (f.stat && f.stat.mtime) || 0;
+        const base = {
           kind: 'vault',
           file: f,
           name: f.basename,
           path: f.path,
-          lower: (f.basename + ' ' + f.path).toLowerCase(),
-          mtime: (f.stat && f.stat.mtime) || 0,
-        });
+          lower: (f.basename + ' ' + f.path + ' ' + aliases.join(' ')).toLowerCase(),
+          mtime,
+        };
+        out.push(base);
+        pushAliasRows(base, aliases);
       }
     } catch (e) { /* noop */ }
     const idx = this._indexCache && this._indexCache.data;
@@ -3780,14 +3814,17 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
         if (!f || f.kind !== 'md') continue;
         const name = path.basename(f.abs, path.extname(f.abs));
         const rel = String(f.rel || name);
-        out.push({
+        const aliases = Array.isArray(f.aliases) ? f.aliases.map((x) => String(x || '').trim()).filter(Boolean) : [];
+        const base = {
           kind: 'external',
           abs: f.abs,
           name,
           path: rel,
-          lower: (name + ' ' + rel).toLowerCase(),
+          lower: (name + ' ' + rel + ' ' + aliases.join(' ')).toLowerCase(),
           mtime: f.mtime || 0,
-        });
+        };
+        out.push(base);
+        pushAliasRows(base, aliases);
       }
     }
     return out;
@@ -3821,15 +3858,32 @@ class ExternalFileImagePlugin extends obsidian.Plugin {
     return hits.slice(0, cap).map((h) => h.it);
   }
 
-  openSwitcherItem(item) {
+  openSwitcherItem(item, mode) {
     if (!item) return;
+    const how = mode === 'tab' || mode === 'split' ? mode : 'current';
     if (item.kind === 'external') {
-      this.guard(() => this.openExternalMd(item.abs));
+      this.guard(async () => {
+        if (how === 'split') {
+          try {
+            const leaf = this.app.workspace.getLeaf('split');
+            if (leaf && await this.openExternalInLeaf(leaf, item.abs)) return;
+          } catch (e) { /* 失败退回新标签页 */ }
+        }
+        if (how === 'tab' || how === 'split') {
+          await this.openExternalInNewTab(item.abs);
+          return;
+        }
+        await this.openExternalMd(item.abs);
+      });
       return;
     }
     if (!item.file) return;
     this.guard(async () => {
-      const leaf = this.app.workspace.getLeaf(false);
+      let leaf = null;
+      try {
+        leaf = how === 'split' ? this.app.workspace.getLeaf('split')
+          : (how === 'tab' ? this.app.workspace.getLeaf(true) : this.app.workspace.getLeaf(false));
+      } catch (e) { leaf = null; }
       if (leaf && typeof leaf.openFile === 'function') await leaf.openFile(item.file);
     });
   }
@@ -6445,8 +6499,59 @@ class CombinedSwitcherModal extends obsidian.FuzzySuggestModal {
     this.plugin = plugin;
     this.items = items || [];
     this.limit = 40;
-    this.emptyStateText = '没有匹配的笔记';
+    this.emptyStateText = '没有匹配的笔记（Shift+Enter 新建）';
     try { this.setPlaceholder('搜索库内 / 库外笔记…'); } catch (e) { /* noop */ }
+    try {
+      const mac = !!(obsidian.Platform && obsidian.Platform.isMacOS);
+      const mod = mac ? '⌘' : 'ctrl';
+      this.setInstructions([
+        { command: mod + ' ↵', purpose: tr('在新标签页中打开') },
+        { command: mod + ' ⌥ ↵', purpose: tr('在新标签组中打开') },
+        { command: 'shift ↵', purpose: tr('创建') },
+      ]);
+    } catch (e) { /* noop */ }
+    // 与原生快速切换一致：Shift+Enter / Cmd+Shift+Enter 用输入内容新建笔记
+    try {
+      const scope = this.scope;
+      if (scope && typeof scope.register === 'function') {
+        scope.register(['Shift'], 'Enter', (evt) => { this.selectSuggestion(null, evt); return false; });
+        scope.register(['Mod', 'Shift'], 'Enter', (evt) => { this.selectSuggestion(null, evt); return false; });
+        scope.register(null, 'Enter', (evt) => { this.selectActiveSuggestion(evt); return false; });
+      }
+    } catch (e) { /* noop */ }
+  }
+
+  /** Shift+Enter：没有匹配时用输入内容创建（交给 openLinkText，和原生一样） */
+  createFromQuery(evt, text) {
+    let query = text != null ? String(text).trim() : '';
+    if (!query) {
+      try { query = String(this.inputEl && this.inputEl.value || '').trim(); } catch (e) { query = ''; }
+    }
+    if (!query) return;
+    let mod = false;
+    try { mod = !!(evt && (evt.metaKey || evt.ctrlKey)); } catch (e) { mod = false; }
+    let base = '';
+    try {
+      const active = this.app.workspace.getActiveFile();
+      if (active && active.path && !/^file:/i.test(active.path)) base = active.path;
+    } catch (e) { base = ''; }
+    try { this.close(); } catch (e) { /* noop */ }
+    this.plugin.guard(() => this.app.workspace.openLinkText(query, base, mod, { active: true }));
+  }
+
+  onChooseSuggestion(suggestion, evt) {
+    if (!suggestion) { this.createFromQuery(evt); return; }
+    const item = suggestion.item || suggestion;
+    if (!item) { this.createFromQuery(evt); return; }
+    this.onChooseItem(item, evt);
+  }
+  onChooseItem(item, evt) {
+    if (item && item.kind === 'create') { this.createFromQuery(evt, item.query); return; }
+    const mod = !!(evt && (evt.metaKey || evt.ctrlKey));
+    const alt = !!(evt && evt.altKey);
+    // 与原生一致：⌘↵ 新标签页；⌘⌥↵ 新标签组
+    const mode = mod ? (alt ? 'split' : 'tab') : 'current';
+    this.plugin.openSwitcherItem(item, mode);
   }
   getSuggestions(query) {
     try {
@@ -6454,7 +6559,16 @@ class CombinedSwitcherModal extends obsidian.FuzzySuggestModal {
       // 会执行 onChooseItem(t.item)。直接返回原始对象会让 t.item 为 undefined，
       // 表现为「能搜到、但按回车或点击没反应」。
       const list = this.plugin.filterSwitcherItems(this.items, query, this.limit);
-      return list.map((item) => ({ match: null, item }));
+      const out = list.map((item) => ({ match: null, item }));
+      const q = String(query || '').trim();
+      if (!out.length && q) {
+        // 与原生一致：没有匹配时给一行「按下回车以创建」
+        out.push({
+          match: null,
+          item: { kind: 'create', name: '创建「' + q + '」', path: '按下回车新建', query: q },
+        });
+      }
+      return out;
     } catch (e) { return []; }
   }
   renderSuggestion(match, el) {
@@ -6462,16 +6576,18 @@ class CombinedSwitcherModal extends obsidian.FuzzySuggestModal {
       const item = match && match.item ? match.item : match;
       if (!item) return;
       el.addClass('ev-switcher-item');
+      if (item.kind === 'create') el.addClass('is-create');
       const title = el.createDiv({ cls: 'ev-switcher-title', text: item.name });
       el.createDiv({ cls: 'ev-switcher-path', text: item.path });
       if (item.kind === 'external') {
         el.addClass('is-external');
         title.createSpan({ cls: 'ev-switcher-tag', text: '外库' });
       }
+      if (item.isAlias) {
+        el.addClass('is-alias');
+        title.createSpan({ cls: 'ev-switcher-tag', text: '别名' });
+      }
     } catch (e) { /* noop */ }
-  }
-  onChooseItem(item) {
-    this.plugin.openSwitcherItem(item);
   }
 }
 

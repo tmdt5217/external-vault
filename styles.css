@@ -466,3 +466,8 @@ body .ev-panel .nav-file-title.is-active::after {
   background: var(--background-modifier-hover);
   color: var(--text-muted);
 }
+
+/* 无匹配时的「创建」行 */
+.ev-switcher-item.is-create .ev-switcher-title {
+  color: var(--text-accent);
+}
